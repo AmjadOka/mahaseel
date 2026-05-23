@@ -7,11 +7,19 @@ import {
   Body,
   Param,
   UseGuards,
-  Req,
   HttpCode,
   HttpStatus,
+  BadRequestException,
+  UseInterceptors,
+  UploadedFiles,
 } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiConsumes,
+  ApiBody,
+} from '@nestjs/swagger';
 import { FarmsService } from './farms.service';
 import { CreateFarmDto, UpdateFarmDto } from './dto/create-farm.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -19,6 +27,9 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { Role } from 'src/common/enums/role.enum';
 import type { AuthUser } from 'src/common/types';
+import { FileValidationPipe } from '../upload/validation.pipe';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 
 @ApiTags('farms')
 @Controller('farms')
@@ -28,31 +39,16 @@ import type { AuthUser } from 'src/common/types';
 export class FarmsController {
   constructor(private readonly farmsService: FarmsService) {}
 
+  @Post()
+  @ApiOperation({ summary: 'Create farm' })
+  create(@CurrentUser() user: AuthUser, @Body() dto: CreateFarmDto) {
+    return this.farmsService.create(user.sub, dto);
+  }
+
   @Get()
   @ApiOperation({ summary: 'List merchant own farms' })
   findAll(@CurrentUser() user: AuthUser) {
     return this.farmsService.findMyFarms(user.sub);
-  }
-
-  @Post()
-  @ApiOperation({ summary: 'Create farm (with optional registry doc upload)' })
-  async create(
-    @CurrentUser() user: AuthUser,
-    @Body() dto: CreateFarmDto,
-    @Req() req?: any,
-  ) {
-    let registryFile;
-    if (req.isMultipart && req.isMultipart()) {
-      const data = await req.file();
-      if (data) {
-        registryFile = {
-          buffer: await data.toBuffer(),
-          filename: data.filename,
-          mimetype: data.mimetype,
-        };
-      }
-    }
-    return this.farmsService.create(user.sub, dto, registryFile);
   }
 
   @Get(':id')
@@ -70,18 +66,44 @@ export class FarmsController {
   ) {
     return this.farmsService.update(id, user.sub, dto);
   }
+  @Post(':id/media')
+  @ApiOperation({ summary: 'Upload farm images/videos (max 10)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+        },
+      },
+    },
+  })
+  @UseInterceptors(FilesInterceptor('files', 10, { storage: memoryStorage() }))
+  uploadMedia(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    if (!files?.length) {
+      throw new BadRequestException('No files provided');
+    }
 
-  @Delete(':id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Delete farm' })
-  remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.farmsService.softDelete(id, user.sub);
+    const pipe = new FileValidationPipe();
+    files.forEach((f) => pipe.transform(f));
+
+    return this.farmsService.uploadMedia(id, user.sub, files);
   }
 
-  @Post('approve/:id')
-  @Roles(Role.ADMIN)
-  @ApiOperation({ summary: '[Admin] Approve a farm registration' })
-  approve(@Param('id') id: string) {
-    return this.farmsService.approve(id);
+  @Delete(':id/media/:mediaId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete a farm media item' })
+  deleteMedia(
+    @Param('id') id: string,
+    @Param('mediaId') mediaId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.farmsService.deleteMedia(id, mediaId, user.sub);
   }
 }

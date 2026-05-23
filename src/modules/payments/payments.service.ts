@@ -16,8 +16,6 @@
 // main.ts — register BEFORE any JSON body-parser middleware:
 //   app.use('/payments/webhook', express.raw({ type: 'application/json' }));
 //
-// npm install @nestjs/schedule  (for the cron job)
-// Register ScheduleModule.forRoot() in your root AppModule.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {

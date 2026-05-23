@@ -26,6 +26,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { AdminModule } from './modules/admin/admin.module';
 import { JwtModule } from '@nestjs/jwt';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { UploadModule } from './modules/upload/upload.module';
 
 @Module({
   imports: [
@@ -111,6 +112,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
     RatingsModule,
     NotificationsModule,
     AdminModule,
+    UploadModule,
   ],
 })
 export class AppModule {}

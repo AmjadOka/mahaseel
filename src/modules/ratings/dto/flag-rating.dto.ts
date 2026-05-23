@@ -1,6 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { FlagReason, FlagStatus } from '../entities/rating.entity';
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class FlagRatingDto {
   @ApiProperty({ enum: FlagReason })
@@ -21,9 +30,25 @@ export class ReviewFlagDto {
   @IsEnum(FlagStatus)
   status: FlagStatus.REVIEWED | FlagStatus.DISMISSED | FlagStatus.REMOVED;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ maxLength: 500 })
   @IsOptional()
   @IsString()
   @MaxLength(500)
   adminNotes?: string;
+}
+
+export class UpdateRatingDto {
+  @ApiPropertyOptional({ minimum: 1, maximum: 5 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  @Type(() => Number)
+  score?: number;
+
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  comment?: string;
 }

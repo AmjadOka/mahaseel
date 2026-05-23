@@ -18,21 +18,21 @@ export class Category {
   @Column({ name: 'name_ar', length: 100 })
   nameAr: string;
 
-  @Column({ name: 'name_en', length: 100, nullable: true })
-  nameEn: string | null;
+  @Column({ name: 'name_en', length: 100 })
+  nameEn: string;
 
-  @Column({ unique: true, nullable: true })
-  slug: string | null;
+  @Column({ name: 'slug', type: 'varchar', unique: true, nullable: true })
+  slug: string;
 
-  @Column({ name: 'icon_url', nullable: true })
+  @Column({ name: 'icon_url', type: 'varchar', nullable: true })
   iconUrl: string | null;
 
   /** Cloudinary public_id — required to replace or delete the icon asset */
-  @Column({ name: 'icon_public_id', nullable: true })
+  @Column({ name: 'icon_public_id', type: 'varchar', nullable: true })
   iconPublicId: string | null;
 
   @Column({ name: 'parent_id', nullable: true })
-  parentId: string | null;
+  parentId: string;
 
   @Column({ name: 'sort_order', default: 0 })
   sortOrder: number;
@@ -50,7 +50,7 @@ export class Category {
 
   @ManyToOne(() => Category, (cat) => cat.children, { nullable: true })
   @JoinColumn({ name: 'parent_id' })
-  parent: Category | null;
+  parent: Category;
 
   @OneToMany(() => Category, (cat) => cat.parent)
   children: Category[];

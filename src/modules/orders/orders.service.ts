@@ -574,7 +574,7 @@ export class OrdersService {
           cancelledOrders.map((o) => o.id),
           {
             status: OrderStatus.PENDING,
-            rejectionReason: undefined,
+            rejectionReason: null,
           },
         );
       }

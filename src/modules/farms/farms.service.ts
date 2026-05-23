@@ -14,6 +14,7 @@ import { FarmStatus } from 'src/common/enums/farm.enum';
 import { NotificationsService } from '../notifications/services/notifications.service';
 import { NotificationType } from 'src/common/enums/notification.enum';
 import { UploadService } from '../upload/upload.service';
+import { MediaType } from 'src/common/enums/platform.enum';
 // import { StorageService } from '../../shared/storage/storage.service';
 
 // ─── DTOs / Types ────────────────────────────────────────────────────────────
@@ -76,20 +77,9 @@ export class FarmsService {
   async create(ownerId: string, dto: CreateFarmDto): Promise<Farm> {
     await this.assertNoDuplicateName(ownerId, dto.name);
 
-    let agRegistryUrl: string | undefined;
-    /* if (registryFile) {
-      agRegistryUrl = await this.storage.upload(
-        registryFile.buffer,
-        registryFile.filename,
-        'farm-registries',
-        registryFile.mimetype,
-      );
-    } */
-
     const farm = this.farmRepo.create({
       ...dto,
       ownerId,
-      agRegistryUrl,
       status: FarmStatus.PENDING,
     });
 

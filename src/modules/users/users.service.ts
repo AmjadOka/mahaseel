@@ -170,8 +170,8 @@ export class UsersService {
     }
 
     await this.repo.update(id, {
-      profileImage: null,
-      avatarPublicId: null,
+      profileImage: undefined,
+      avatarPublicId: undefined,
     });
 
     return this.findById(id);

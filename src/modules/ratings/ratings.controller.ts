@@ -10,16 +10,26 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { CurrentUser, Roles } from 'src/common/decorators';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
-import { User } from '../users/entities/user.entity';
 import { CreateRatingDto } from './dto/creat-rating.dto';
+import {
+  FlagRatingDto,
+  ReviewFlagDto,
+  UpdateRatingDto,
+} from './dto/flag-rating.dto';
 import { RatingsService } from './ratings.service';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
-import { FlagRatingDto, ReviewFlagDto } from './dto/flag-rating.dto';
 import { Role } from 'src/common/enums/role.enum';
+import { FlagStatus } from './entities/rating.entity';
+import type { AuthUser } from 'src/common/types';
 
 @ApiTags('ratings')
 @Controller('ratings')
@@ -28,16 +38,44 @@ import { Role } from 'src/common/enums/role.enum';
 export class RatingsController {
   constructor(private readonly ratingsService: RatingsService) {}
 
+  // ─── Ratings ──────────────────────────────────────────────────────────────
+
   @Post()
+  @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Submit a rating for a completed order' })
-  create(@CurrentUser() user: User, @Body() dto: CreateRatingDto) {
-    return this.ratingsService.create(user.id, dto);
+  create(@CurrentUser() user: AuthUser, @Body() dto: CreateRatingDto) {
+    return this.ratingsService.create(user.sub, dto);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Edit a rating you submitted' })
+  update(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpdateRatingDto,
+  ) {
+    return this.ratingsService.update(id, user.sub, dto);
+  }
+
+  @Get('me')
+  @ApiOperation({ summary: 'Ratings I received' })
+  getMyRatings(
+    @CurrentUser() user: AuthUser,
+    @Query() pagination: PaginationDto,
+  ) {
+    return this.ratingsService.getByUser(user.sub, pagination);
   }
 
   @Get('given')
   @ApiOperation({ summary: 'Ratings I submitted' })
-  getGiven(@CurrentUser() user: User, @Query() pagination: PaginationDto) {
-    return this.ratingsService.getGiven(user.id, pagination);
+  getGiven(@CurrentUser() user: AuthUser, @Query() pagination: PaginationDto) {
+    return this.ratingsService.getGiven(user.sub, pagination);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get a single rating by ID' })
+  findOne(@Param('id') id: string) {
+    return this.ratingsService.findOne(id);
   }
 
   @Get('user/:userId')
@@ -49,6 +87,8 @@ export class RatingsController {
     return this.ratingsService.getByUser(userId, pagination);
   }
 
+  // ─── Flags ────────────────────────────────────────────────────────────────
+
   @Post(':id/flag')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -56,19 +96,30 @@ export class RatingsController {
   })
   flagRating(
     @Param('id') ratingId: string,
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthUser,
     @Body() dto: FlagRatingDto,
   ) {
-    return this.ratingsService.flagRating(ratingId, user.id, dto);
+    return this.ratingsService.flagRating(ratingId, user.sub, dto);
   }
 
-  // ─── Admin ───────────────────────────────────────────────────────────────
+  // ─── Admin ────────────────────────────────────────────────────────────────
+
+  @Get('admin/ratings')
+  @Roles(Role.ADMIN)
+  @ApiOperation({ summary: '[Admin] List all ratings' })
+  getAllRatings(@Query() pagination: PaginationDto) {
+    return this.ratingsService.getAllRatings(pagination);
+  }
 
   @Get('admin/flags')
   @Roles(Role.ADMIN)
-  @ApiOperation({ summary: '[Admin] List pending rating flags' })
-  getPendingFlags(@Query() pagination: PaginationDto) {
-    return this.ratingsService.getPendingFlags(pagination);
+  @ApiOperation({ summary: '[Admin] List flags — filter by status' })
+  @ApiQuery({ name: 'status', enum: FlagStatus, required: false })
+  getFlags(
+    @Query() pagination: PaginationDto,
+    @Query('status') status?: FlagStatus,
+  ) {
+    return this.ratingsService.getFlags(pagination, status);
   }
 
   @Patch('admin/flags/:flagId')

@@ -58,10 +58,10 @@ export class User {
     name: 'profile_image',
     nullable: true,
   })
-  profileImage: string | null;
+  profileImage: string;
 
   @Column({ nullable: true })
-  avatarPublicId: string | null;
+  avatarPublicId: string;
 
   /* =====================================================
       AUTH

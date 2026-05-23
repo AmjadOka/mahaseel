@@ -1,4 +1,3 @@
-// modules/auctions/auctions.scheduler.ts
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -13,23 +12,23 @@ export class PaymentSchedular implements OnModuleInit {
 
   constructor(
     @InjectQueue(PAYMENT_QUEUE)
-    private readonly auctionsQueue: Queue,
+    private readonly paymentQueue: Queue,
   ) {}
 
   async onModuleInit() {
-    const schedulers = await this.auctionsQueue.getJobSchedulers();
+    const schedulers = await this.paymentQueue.getJobSchedulers();
 
     await Promise.all(
       schedulers
         .filter((s): s is typeof s & { id: string } => !!s.id)
-        .map((s) => this.auctionsQueue.removeJobScheduler(s.id)),
+        .map((s) => this.paymentQueue.removeJobScheduler(s.id)),
     );
 
     // Create/update scheduler
-    await this.auctionsQueue.upsertJobScheduler(
+    await this.paymentQueue.upsertJobScheduler(
       CLOSE_EXPIRED_PAYMENTS_JOB, // scheduler id
       {
-        pattern: '* * * * *', // every minute
+        pattern: '0 */30 * * * *',
       },
       {
         name: CLOSE_EXPIRED_PAYMENTS_JOB,
@@ -41,6 +40,6 @@ export class PaymentSchedular implements OnModuleInit {
       },
     );
 
-    this.logger.log('Scheduled: close-expired-auctions (every minute)');
+    this.logger.log('CLOSE_EXPIRED_PAYMENTS_JOB (every minute)');
   }
 }

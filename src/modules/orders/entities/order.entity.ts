@@ -93,7 +93,7 @@ export class Order {
   notes: string;
 
   @Column({ name: 'rejection_reason', type: 'text', nullable: true })
-  rejectionReason: string;
+  rejectionReason: string | null;
 
   @Column({ name: 'buyer_phone_revealed', default: false })
   buyerPhoneRevealed: boolean;

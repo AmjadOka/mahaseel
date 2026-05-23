@@ -17,32 +17,32 @@ import { paginate } from '../../shared/pagination/pagination.helper';
 import { NotificationsService } from '../notifications/services/notifications.service';
 import { NotificationType } from 'src/common/enums/notification.enum';
 import { CreateRatingDto } from './dto/creat-rating.dto';
-import { FlagRatingDto, ReviewFlagDto } from './dto/flag-rating.dto';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Service
-// ─────────────────────────────────────────────────────────────────────────────
+import {
+  FlagRatingDto,
+  ReviewFlagDto,
+  UpdateRatingDto,
+} from './dto/flag-rating.dto';
 
 @Injectable()
 export class RatingsService {
   constructor(
     @InjectRepository(Rating)
-    private ratingsRepo: Repository<Rating>,
+    private readonly ratingsRepo: Repository<Rating>,
 
     @InjectRepository(RatingFlag)
-    private flagsRepo: Repository<RatingFlag>,
+    private readonly flagsRepo: Repository<RatingFlag>,
 
     @InjectRepository(Order)
-    private ordersRepo: Repository<Order>,
+    private readonly ordersRepo: Repository<Order>,
 
     @InjectRepository(User)
-    private usersRepo: Repository<User>,
+    private readonly usersRepo: Repository<User>,
 
-    private dataSource: DataSource,
-    private notificationsService: NotificationsService,
+    private readonly dataSource: DataSource,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
-  // ─── Create ──────────────────────────────────────────────────────────────
+  // ─── Create ───────────────────────────────────────────────────────────────
 
   async create(reviewerId: string, dto: CreateRatingDto): Promise<Rating> {
     const order = await this.ordersRepo.findOne({
@@ -51,11 +51,11 @@ export class RatingsService {
     });
 
     if (!order) throw new NotFoundException('Order not found');
+
     if (order.status !== OrderStatus.COMPLETED) {
       throw new BadRequestException('Can only rate completed orders');
     }
 
-    // Determine direction
     let reviewedId: string;
     if (order.buyerId === reviewerId) {
       reviewedId = order.merchantId;
@@ -65,12 +65,12 @@ export class RatingsService {
       throw new ForbiddenException('You are not part of this order');
     }
 
-    // Fix: check by BOTH orderId AND reviewerId so both parties can submit
     const existing = await this.ratingsRepo.findOne({
       where: { orderId: dto.orderId, reviewerId },
     });
-    if (existing)
-      throw new BadRequestException('You have already rated this order');
+    if (existing) {
+      throw new ConflictException('You have already rated this order');
+    }
 
     const rating = this.ratingsRepo.create({
       orderId: dto.orderId,
@@ -81,19 +81,16 @@ export class RatingsService {
     });
 
     const saved = await this.ratingsRepo.save(rating);
-
-    // Recalculate reviewed user's stats
     await this.recalculateRating(reviewedId);
 
-    // Notify the reviewed user
     const reviewer = await this.usersRepo.findOne({
       where: { id: reviewerId },
     });
     await this.notificationsService.notify(reviewedId, {
       type: NotificationType.RATING_RECEIVED,
-      title: '',
-      body: '',
-      titleAr: 'تقييم جديد',
+      title: 'New Rating Received ⭐',
+      body: `${reviewer?.fullName ?? 'Someone'} rated you ${dto.score}/5 stars`,
+      titleAr: 'تقييم جديد ⭐',
       bodyAr: `${reviewer?.fullName ?? 'أحد المستخدمين'} قيّمك بـ ${dto.score} من 5 نجوم`,
       referenceType: 'rating',
       referenceId: saved.id,
@@ -102,7 +99,65 @@ export class RatingsService {
     return saved;
   }
 
-  // ─── Flag (report) a rating ───────────────────────────────────────────────
+  // ─── Update ───────────────────────────────────────────────────────────────
+
+  async update(
+    ratingId: string,
+    reviewerId: string,
+    dto: UpdateRatingDto,
+  ): Promise<Rating> {
+    const rating = await this.ratingsRepo.findOne({ where: { id: ratingId } });
+
+    if (!rating) throw new NotFoundException('Rating not found');
+    if (rating.reviewerId !== reviewerId) {
+      throw new ForbiddenException('You can only edit your own ratings');
+    }
+
+    Object.assign(rating, dto);
+    const saved = await this.ratingsRepo.save(rating);
+    await this.recalculateRating(rating.reviewedId);
+
+    return saved;
+  }
+
+  // ─── Find one ─────────────────────────────────────────────────────────────
+
+  async findOne(id: string): Promise<Rating> {
+    const rating = await this.ratingsRepo.findOne({
+      where: { id },
+      relations: ['reviewer', 'reviewed', 'order'],
+    });
+    if (!rating) throw new NotFoundException('Rating not found');
+    return rating;
+  }
+
+  // ─── Ratings received by a user ───────────────────────────────────────────
+
+  async getByUser(userId: string, pagination: PaginationDto) {
+    const qb = this.ratingsRepo
+      .createQueryBuilder('r')
+      .leftJoinAndSelect('r.reviewer', 'reviewer')
+      .leftJoinAndSelect('r.order', 'order')
+      .where('r.reviewedId = :userId', { userId })
+      .orderBy('r.createdAt', 'DESC');
+
+    return paginate(qb, Number(pagination.page), Number(pagination.limit));
+  }
+
+  // ─── Ratings submitted by the current user ────────────────────────────────
+
+  async getGiven(reviewerId: string, pagination: PaginationDto) {
+    const qb = this.ratingsRepo
+      .createQueryBuilder('r')
+      .leftJoinAndSelect('r.reviewed', 'reviewed')
+      .leftJoinAndSelect('r.order', 'order')
+      .where('r.reviewerId = :reviewerId', { reviewerId })
+      .orderBy('r.createdAt', 'DESC');
+
+    return paginate(qb, Number(pagination.page), Number(pagination.limit));
+  }
+
+  // ─── Flag a rating ────────────────────────────────────────────────────────
 
   async flagRating(
     ratingId: string,
@@ -112,7 +167,6 @@ export class RatingsService {
     const rating = await this.ratingsRepo.findOne({ where: { id: ratingId } });
     if (!rating) throw new NotFoundException('Rating not found');
 
-    // Only the reviewed user can flag a rating against them
     if (rating.reviewedId !== reporterId) {
       throw new ForbiddenException(
         'You can only flag ratings submitted about you',
@@ -136,17 +190,21 @@ export class RatingsService {
     return this.flagsRepo.save(flag);
   }
 
-  // ─── Admin: list pending flags ────────────────────────────────────────────
+  // ─── Admin: list flags ────────────────────────────────────────────────────
 
-  async getPendingFlags(pagination: PaginationDto) {
+  async getFlags(pagination: PaginationDto, status?: FlagStatus) {
     const qb = this.flagsRepo
       .createQueryBuilder('f')
       .leftJoinAndSelect('f.rating', 'rating')
       .leftJoinAndSelect('f.reporter', 'reporter')
       .leftJoinAndSelect('rating.reviewer', 'reviewer')
       .leftJoinAndSelect('rating.reviewed', 'reviewed')
-      .where('f.status = :status', { status: FlagStatus.PENDING })
       .orderBy('f.createdAt', 'ASC');
+
+    if (status) {
+      qb.where('f.status = :status', { status });
+    }
+
     return paginate(qb, Number(pagination.page), Number(pagination.limit));
   }
 
@@ -157,29 +215,29 @@ export class RatingsService {
       where: { id: flagId },
       relations: ['rating'],
     });
+
     if (!flag) throw new NotFoundException('Flag not found');
     if (flag.status !== FlagStatus.PENDING) {
       throw new BadRequestException('Flag has already been reviewed');
     }
 
-    // If admin decides to remove the rating entirely
     if (dto.status === FlagStatus.REMOVED) {
+      // ✅ recalculate AFTER the transaction commits — not inside it
       await this.dataSource.transaction(async (manager) => {
         await manager.delete(Rating, flag.ratingId);
         await manager.update(RatingFlag, flagId, {
           status: FlagStatus.REMOVED,
           adminNotes: dto.adminNotes,
         });
-        // Recalculate the affected user's rating after deletion
-        await this.recalculateRating(flag.rating.reviewedId);
       });
 
-      // Notify the reporter that action was taken
+      await this.recalculateRating(flag.rating.reviewedId);
+
       await this.notificationsService.notify(flag.reporterId, {
         type: NotificationType.RATING_RECEIVED,
-        title: '',
-        body: '',
-        titleAr: 'تم مراجعة البلاغ',
+        title: 'Your Report Was Reviewed ✅',
+        body: 'Your flag was reviewed and the reported rating has been removed.',
+        titleAr: 'تم مراجعة البلاغ ✅',
         bodyAr: 'تمت مراجعة بلاغك وإزالة التقييم المُبلَّغ عنه.',
         referenceType: 'flag',
         referenceId: flagId,
@@ -190,33 +248,28 @@ export class RatingsService {
         adminNotes: dto.adminNotes,
       });
     }
-    const updated = await this.flagsRepo.findOne({ where: { id: flagId } });
-    if (!updated) throw new NotFoundException('Flag not found, err happen');
-    return updated;
+    const updatedFlag = await this.flagsRepo.findOne({
+      where: { id: flagId },
+      relations: ['rating', 'reporter'],
+    });
+    if (!updatedFlag) throw new NotFoundException();
+    return updatedFlag;
   }
 
-  // ─── Queries ──────────────────────────────────────────────────────────────
+  // ─── Admin: list all ratings ──────────────────────────────────────────────
 
-  async getByUser(userId: string, pagination: PaginationDto) {
+  async getAllRatings(pagination: PaginationDto) {
     const qb = this.ratingsRepo
       .createQueryBuilder('r')
       .leftJoinAndSelect('r.reviewer', 'reviewer')
-      .leftJoinAndSelect('r.order', 'order')
-      .where('r.reviewedId = :userId', { userId })
-      .orderBy('r.createdAt', 'DESC');
-    return paginate(qb, Number(pagination.page), Number(pagination.limit));
-  }
-
-  async getGiven(reviewerId: string, pagination: PaginationDto) {
-    const qb = this.ratingsRepo
-      .createQueryBuilder('r')
       .leftJoinAndSelect('r.reviewed', 'reviewed')
-      .where('r.reviewerId = :reviewerId', { reviewerId })
+      .leftJoinAndSelect('r.order', 'order')
       .orderBy('r.createdAt', 'DESC');
+
     return paginate(qb, Number(pagination.page), Number(pagination.limit));
   }
 
-  // ─── Private ──────────────────────────────────────────────────────────────
+  // ─── Private helpers ──────────────────────────────────────────────────────
 
   private async recalculateRating(userId: string): Promise<void> {
     const result = await this.ratingsRepo
