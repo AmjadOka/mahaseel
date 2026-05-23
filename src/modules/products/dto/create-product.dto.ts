@@ -14,7 +14,7 @@ import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 
 import { Type } from 'class-transformer';
 
-import { SaleMethod, Unit } from '../../../common/enums/Unit.enum.ts.js';
+import { SaleMethod, Unit } from '../../../common/enums/Unit.enum.js';
 
 import { DeliveryMethod } from '../../../common/enums/delivery.enum.js';
 

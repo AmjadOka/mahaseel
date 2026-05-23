@@ -26,7 +26,7 @@ import { FarmStatus } from 'src/common/enums/farm.enum';
 
 import { ProductStatus } from 'src/common/enums/product.enum';
 
-import { SaleMethod } from 'src/common/enums/Unit.enum.ts';
+import { SaleMethod } from 'src/common/enums/Unit.enum';
 
 import { MediaType } from 'src/common/enums/platform.enum';
 import { PaginationDto } from 'src/common/dto/pagination.dto';

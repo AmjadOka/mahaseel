@@ -28,7 +28,7 @@ export interface WithdrawalStats {
   pending: number;
   completed: number;
   rejected: number;
-  totalAmountPending: number; // sum of pending withdrawal amounts
+  totalAmountPending: number; // sum of amounts in PENDING state
   totalAmountCompleted: number; // total SAR transferred out all time
 }
 
@@ -79,7 +79,7 @@ export class AdminWithdrawalsService {
   }
 
   /**
-   * Pending queue sorted oldest-first — oldest requests reviewed first.
+   * Pending queue sorted oldest-first — oldest requests are reviewed first.
    */
   async getPendingWithdrawals(pagination: PaginationDto) {
     const qb = this.withdrawalsRepo
@@ -93,12 +93,15 @@ export class AdminWithdrawalsService {
   }
 
   async getWithdrawal(id: string): Promise<WithdrawalRequest> {
-    const w = await this.withdrawalsRepo.findOne({
+    const withdrawal = await this.withdrawalsRepo.findOne({
       where: { id },
       relations: ['merchant', 'bankAccount'],
     });
-    if (!w) throw new NotFoundException('Withdrawal request not found');
-    return w;
+
+    if (!withdrawal)
+      throw new NotFoundException('Withdrawal request not found');
+
+    return withdrawal;
   }
 
   async getStats(): Promise<WithdrawalStats> {
@@ -114,7 +117,7 @@ export class AdminWithdrawalsService {
         totalAmount: string;
       }>();
 
-    const base: WithdrawalStats = {
+    const stats: WithdrawalStats = {
       total: 0,
       pending: 0,
       completed: 0,
@@ -126,24 +129,24 @@ export class AdminWithdrawalsService {
     for (const row of rows) {
       const count = parseInt(row.count, 10);
       const amount = parseFloat(row.totalAmount);
-      base.total += count;
+      stats.total += count;
 
       switch (row.status) {
         case WithdrawalStatus.PENDING:
-          base.pending = count;
-          base.totalAmountPending = amount;
+          stats.pending = count;
+          stats.totalAmountPending = amount;
           break;
         case WithdrawalStatus.COMPLETED:
-          base.completed = count;
-          base.totalAmountCompleted = amount;
+          stats.completed = count;
+          stats.totalAmountCompleted = amount;
           break;
         case WithdrawalStatus.REJECTED:
-          base.rejected = count;
+          stats.rejected = count;
           break;
       }
     }
 
-    return base;
+    return stats;
   }
 
   // ── Mutations ──────────────────────────────────────────────────────────────
@@ -152,7 +155,7 @@ export class AdminWithdrawalsService {
    * Approves or rejects a withdrawal request.
    * All business logic (wallet debit, merchant notification) lives in
    * WalletService.processWithdrawal — this service only adds audit logging
-   * and guards the transition from a non-pending state.
+   * and guards against double-processing a non-pending request.
    */
   async processWithdrawal(id: string, payload: ProcessPayload) {
     const withdrawal = await this.getWithdrawal(id);

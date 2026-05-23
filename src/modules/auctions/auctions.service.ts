@@ -21,7 +21,7 @@ import { Product } from '../products/entities/product.entity';
 import { ProductStatus } from 'src/common/enums/product.enum';
 import { BidStatus } from 'src/common/enums/bid.enum';
 import { NotificationType } from 'src/common/enums/notification.enum';
-import { SaleMethod } from 'src/common/enums/Unit.enum.ts';
+import { SaleMethod } from 'src/common/enums/Unit.enum';
 
 type LoserRow = { buyerId: string };
 

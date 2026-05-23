@@ -6,6 +6,7 @@ import {
   IsArray,
   IsIn,
   MinLength,
+  IsDateString,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { NotificationType } from 'src/common/enums/notification.enum';
@@ -14,7 +15,7 @@ import { Role } from 'src/common/enums/role.enum';
 // ─── Farms ───────────────────────────────────────────────────────────────────
 
 export class RejectFarmDto {
-  @ApiProperty({ description: 'Reason shown to the merchant' })
+  @ApiProperty({ description: 'Reason shown to the merchant', minLength: 5 })
   @IsString()
   @MinLength(5)
   reason: string;
@@ -27,7 +28,9 @@ export class ProcessWithdrawalDto {
   @IsIn(['complete', 'reject'])
   action: 'complete' | 'reject';
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: 'Optional admin note — stored on the request and in audit log',
+  })
   @IsOptional()
   @IsString()
   adminNotes?: string;
@@ -45,7 +48,7 @@ export class ForceOrderActionDto {
 // ─── Products ─────────────────────────────────────────────────────────────────
 
 export class DeactivateProductDto {
-  @ApiProperty()
+  @ApiProperty({ minLength: 5 })
   @IsString()
   @MinLength(5)
   reason: string;
@@ -54,7 +57,7 @@ export class DeactivateProductDto {
 // ─── Ratings ──────────────────────────────────────────────────────────────────
 
 export class RemoveRatingDto {
-  @ApiProperty()
+  @ApiProperty({ minLength: 5 })
   @IsString()
   @MinLength(5)
   reason: string;
@@ -84,12 +87,12 @@ export class BroadcastNotificationDto {
   @IsEnum(NotificationType)
   type: NotificationType;
 
-  @ApiProperty()
+  @ApiProperty({ minLength: 2 })
   @IsString()
   @MinLength(2)
   title: string;
 
-  @ApiProperty()
+  @ApiProperty({ minLength: 2 })
   @IsString()
   @MinLength(2)
   body: string;
@@ -103,4 +106,65 @@ export class BroadcastNotificationDto {
   @IsOptional()
   @IsString()
   bodyAr?: string;
+}
+
+// ─── Date Range (shared across Reports / Orders / Withdrawals query params) ───
+
+/**
+ * Use as @Query() on any endpoint that accepts from/to date filters.
+ * Validates ISO format before it ever reaches service or SQL.
+ *
+ * Example: GET /admin/reports/revenue?from=2025-01-01&to=2025-12-31
+ */
+export class DateRangeDto {
+  @ApiPropertyOptional({
+    example: '2025-01-01',
+    description: 'ISO 8601 date (inclusive start)',
+  })
+  @IsOptional()
+  @IsDateString()
+  from?: string;
+
+  @ApiPropertyOptional({
+    example: '2025-12-31',
+    description: 'ISO 8601 date (inclusive end)',
+  })
+  @IsOptional()
+  @IsDateString()
+  to?: string;
+}
+
+// ─── Audit Log Query ──────────────────────────────────────────────────────────
+
+export class AuditLogQueryDto extends DateRangeDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  adminId?: string;
+
+  @ApiPropertyOptional({ example: 'user' })
+  @IsOptional()
+  @IsString()
+  resourceType?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  resourceId?: string;
+
+  @ApiPropertyOptional({ example: 'SUSPEND_USER' })
+  @IsOptional()
+  @IsString()
+  action?: string;
+}
+
+// ─── Suspend User ─────────────────────────────────────────────────────────────
+
+export class SuspendUserDto {
+  @ApiPropertyOptional({
+    description: 'Reason communicated to the user in the notification',
+  })
+  @IsOptional()
+  @IsString()
+  reason?: string;
 }

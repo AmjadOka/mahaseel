@@ -12,7 +12,7 @@ import { Farm } from '../../farms/entities/farm.entity';
 import { Category } from '../../categories/entities/category.entity';
 import { Order } from '../../orders/entities/order.entity';
 import { AuctionBid } from '../../auctions/entities/auction-bid.entity';
-import { SaleMethod, Unit } from 'src/common/enums/Unit.enum.ts';
+import { SaleMethod, Unit } from 'src/common/enums/Unit.enum';
 import { ProductStatus } from 'src/common/enums/product.enum';
 import { DeliveryMethod } from 'src/common/enums/delivery.enum';
 import { MediaType } from 'src/common/enums/platform.enum';

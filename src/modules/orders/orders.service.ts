@@ -15,7 +15,7 @@ import { NotificationsService } from '../notifications/services/notifications.se
 import { WalletService } from '../wallet/wallet.service';
 import { PaymentsService } from '../payments/payments.service';
 import { paginate } from '../../shared/pagination/pagination.helper';
-import { SaleMethod } from '../../common/enums/Unit.enum.ts';
+import { SaleMethod } from '../../common/enums/Unit.enum';
 import {
   DeliveryStatus,
   OrderStatus,

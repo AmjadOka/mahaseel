@@ -16,4 +16,5 @@ export interface AuthUser {
   sub: string;
   role: Role;
   email: string;
+  phone: string;
 }

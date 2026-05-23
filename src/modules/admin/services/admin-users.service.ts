@@ -9,6 +9,7 @@ import { Repository } from 'typeorm';
 
 import { User } from '../../users/entities/user.entity';
 import { NotificationsService } from '../../notifications/services/notifications.service';
+import { AdminAuditService } from './admin-audit.service';
 
 import { Role } from 'src/common/enums/role.enum';
 import { NotificationType } from 'src/common/enums/notification.enum';
@@ -20,7 +21,7 @@ import { paginate } from '../../../shared/pagination/pagination.helper';
 export interface UserFilters {
   role?: Role;
   isActive?: boolean;
-  search?: string; // ILIKE on phone / email
+  search?: string;
 }
 
 export interface UserStats {
@@ -50,6 +51,7 @@ export class AdminUsersService {
   constructor(
     @InjectRepository(User) private readonly usersRepo: Repository<User>,
     private readonly notificationsService: NotificationsService,
+    private readonly auditService: AdminAuditService, // NEW
   ) {}
 
   // ── Queries ────────────────────────────────────────────────────────────────
@@ -128,11 +130,6 @@ export class AdminUsersService {
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
-  /**
-   * Suspends an active user account.
-   * Guards against suspending an already-suspended or admin account.
-   * Notifies the user with the reason.
-   */
   async suspendUser(id: string, payload: SuspendPayload) {
     const user = await this.findOrFail(id);
 
@@ -144,6 +141,15 @@ export class AdminUsersService {
     await this.usersRepo.update(id, { isActive: false });
 
     this.logger.warn(`User suspended [id=${id}] by admin [${payload.adminId}]`);
+
+    await this.auditService.log({
+      adminId: payload.adminId,
+      action: 'SUSPEND_USER',
+      resourceType: 'user',
+      resourceId: id,
+      reason: payload.reason,
+      meta: { userPhone: user.phone, userRole: user.role },
+    });
 
     await this.notificationsService.notify(id, {
       type: NotificationType.ACCOUNT_SUSPENDED,
@@ -160,10 +166,6 @@ export class AdminUsersService {
     return { message: `User ${user.phone} suspended`, userId: id };
   }
 
-  /**
-   * Reinstates a suspended user.
-   * Notifies the user so they know they can log in again.
-   */
   async reinstateUser(id: string, payload: ReinstatePayload) {
     const user = await this.findOrFail(id);
 
@@ -172,6 +174,14 @@ export class AdminUsersService {
     await this.usersRepo.update(id, { isActive: true });
 
     this.logger.log(`User reinstated [id=${id}] by admin [${payload.adminId}]`);
+
+    await this.auditService.log({
+      adminId: payload.adminId,
+      action: 'REINSTATE_USER',
+      resourceType: 'user',
+      resourceId: id,
+      meta: { userPhone: user.phone },
+    });
 
     await this.notificationsService.notify(id, {
       type: NotificationType.ACCOUNT_REINSTATED,

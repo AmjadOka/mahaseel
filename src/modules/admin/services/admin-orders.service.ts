@@ -4,14 +4,16 @@ import { Repository, DataSource } from 'typeorm';
 
 import { Order } from '../../orders/entities/order.entity';
 import { OrdersService } from '../../orders/orders.service';
+import { WalletService } from '../../wallet/wallet.service';
 import { NotificationsService } from '../../notifications/services/notifications.service';
+import { AdminAuditService } from './admin-audit.service';
 
 import {
   OrderStatus,
   DeliveryStatus,
 } from 'src/common/enums/order-status.enum';
 import { NotificationType } from 'src/common/enums/notification.enum';
-import { SaleMethod } from 'src/common/enums/Unit.enum.ts';
+import { SaleMethod } from 'src/common/enums/Unit.enum';
 import { PaginationDto } from '../../../common/dto/pagination.dto';
 import { paginate } from '../../../shared/pagination/pagination.helper';
 
@@ -22,9 +24,9 @@ export interface OrderFilters {
   saleMethod?: SaleMethod;
   merchantId?: string;
   buyerId?: string;
-  search?: string; // product name ILIKE
-  from?: string; // ISO date string
-  to?: string; // ISO date string
+  search?: string;
+  from?: string;
+  to?: string;
 }
 
 export interface OrderStats {
@@ -36,8 +38,8 @@ export interface OrderStats {
   cancelled: number;
   rejected: number;
   openDisputes: number;
-  totalRevenue: number; // sum of finalPrice on COMPLETED orders
-  totalPlatformFees: number; // sum of platformFee on COMPLETED orders
+  totalRevenue: number;
+  totalPlatformFees: number;
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -49,7 +51,9 @@ export class AdminOrdersService {
   constructor(
     @InjectRepository(Order) private readonly ordersRepo: Repository<Order>,
     private readonly ordersService: OrdersService,
+    private readonly walletService: WalletService, // NEW
     private readonly notificationsService: NotificationsService,
+    private readonly auditService: AdminAuditService, // NEW
     private readonly dataSource: DataSource,
   ) {}
 
@@ -66,26 +70,20 @@ export class AdminOrdersService {
 
     if (filters.status)
       qb.andWhere('o.status = :status', { status: filters.status });
-
     if (filters.saleMethod)
       qb.andWhere('o.saleMethod = :saleMethod', {
         saleMethod: filters.saleMethod,
       });
-
     if (filters.merchantId)
       qb.andWhere('o.merchantId = :merchantId', {
         merchantId: filters.merchantId,
       });
-
     if (filters.buyerId)
       qb.andWhere('o.buyerId = :buyerId', { buyerId: filters.buyerId });
-
     if (filters.search)
       qb.andWhere('product.name ILIKE :q', { q: `%${filters.search}%` });
-
     if (filters.from)
       qb.andWhere('o.createdAt >= :from', { from: filters.from });
-
     if (filters.to) qb.andWhere('o.createdAt <= :to', { to: filters.to });
 
     return paginate(qb, Number(pagination.page), Number(pagination.limit));
@@ -95,9 +93,6 @@ export class AdminOrdersService {
     return this.ordersService.findOne(id);
   }
 
-  /**
-   * All orders belonging to a specific user (as buyer or merchant).
-   */
   async getOrdersByUser(userId: string, pagination: PaginationDto) {
     const qb = this.ordersRepo
       .createQueryBuilder('o')
@@ -112,8 +107,7 @@ export class AdminOrdersService {
   }
 
   /**
-   * Orders stuck in AWAITING_PAYMENT with no successful payment after 24 h,
-   * plus any order flagged in a dispute state — sorted oldest first (review queue).
+   * FIX M8: Now uses AWAITING_PAYMENT (consistent with dashboard).
    */
   async getOpenDisputes(pagination: PaginationDto) {
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -124,9 +118,7 @@ export class AdminOrdersService {
       .leftJoinAndSelect('o.merchant', 'merchant')
       .leftJoinAndSelect('o.product', 'product')
       .leftJoinAndSelect('o.payment', 'payment')
-      .where('o.status = :awaitingPayment', {
-        awaitingPayment: OrderStatus.AWAITING_PAYMENT,
-      })
+      .where('o.status = :status', { status: OrderStatus.AWAITING_PAYMENT })
       .andWhere('(payment.id IS NULL OR payment.status != :paid)', {
         paid: 'paid',
       })
@@ -211,10 +203,6 @@ export class AdminOrdersService {
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
-  /**
-   * Admin force-cancels a disputed or stuck order.
-   * Notifies both buyer and merchant.
-   */
   async forceCancel(
     id: string,
     adminId: string,
@@ -237,6 +225,20 @@ export class AdminOrdersService {
     });
 
     this.logger.warn(`Order force-cancelled [id=${id}] by admin [${adminId}]`);
+
+    // NEW: audit log
+    await this.auditService.log({
+      adminId,
+      action: 'FORCE_CANCEL_ORDER',
+      resourceType: 'order',
+      resourceId: id,
+      reason,
+      meta: {
+        previousStatus: order.status,
+        buyerId: order.buyerId,
+        merchantId: order.merchantId,
+      },
+    });
 
     await Promise.all([
       this.notificationsService.notify(order.buyerId, {
@@ -262,10 +264,6 @@ export class AdminOrdersService {
     return { message: 'Order force-cancelled', orderId: id };
   }
 
-  /**
-   * Admin force-completes an order stuck in a delivery dispute.
-   * Releases the merchant's pending wallet balance and notifies both parties.
-   */
   async forceComplete(
     id: string,
     adminId: string,
@@ -273,28 +271,47 @@ export class AdminOrdersService {
   ): Promise<{ message: string; orderId: string }> {
     const order = await this.ordersService.findOne(id);
 
-    if (order.status === OrderStatus.COMPLETED) {
+    if (order.status === OrderStatus.COMPLETED)
       throw new BadRequestException('Order is already completed.');
-    }
-    if (order.status === OrderStatus.CANCELLED) {
+    if (order.status === OrderStatus.CANCELLED)
       throw new BadRequestException('Cannot complete a cancelled order.');
-    }
 
-    // Use a transaction so wallet release and status update are atomic
     await this.dataSource.transaction(async (manager) => {
       await manager.update(Order, id, {
         status: OrderStatus.COMPLETED,
         deliveryStatus: DeliveryStatus.DELIVERED,
       });
 
-      // Only release wallet funds if the order was paid (ACCEPTED state)
+      /**
+       * FIX M1: Wallet release was permanently commented out — merchants were never paid.
+       * Now wired: only release funds if the order was already ACCEPTED (i.e. payment captured).
+       */
       if (order.status === OrderStatus.ACCEPTED) {
-        // Import WalletService if not already injected and call releasePending
-        // await this.walletService.releasePending(order.merchantId, Number(order.netAmount), id, manager);
+        await this.walletService.releasePending(
+          order.merchantId,
+          Number(order.netAmount),
+          id,
+          manager,
+        );
       }
     });
 
     this.logger.log(`Order force-completed [id=${id}] by admin [${adminId}]`);
+
+    // NEW: audit log
+    await this.auditService.log({
+      adminId,
+      action: 'FORCE_COMPLETE_ORDER',
+      resourceType: 'order',
+      resourceId: id,
+      reason,
+      meta: {
+        previousStatus: order.status,
+        walletReleased: order.status === OrderStatus.ACCEPTED,
+        netAmount: order.netAmount,
+        merchantId: order.merchantId,
+      },
+    });
 
     await Promise.all([
       this.notificationsService.notify(order.buyerId, {

@@ -8,14 +8,22 @@ import {
   UseGuards,
   ParseUUIDPipe,
 } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiResponse,
+} from '@nestjs/swagger';
 
 import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../../../common/guards/admin.guard';
 import { AdminUsersService } from '../services/admin-users.service';
-
+import { SuspendUserDto } from '../dto/index';
 import { Role } from 'src/common/enums/role.enum';
 import { PaginationDto } from '../../../common/dto/pagination.dto';
+import { CurrentUser } from 'src/common/decorators';
+import type { AuthUser } from 'src/common/types';
 
 @ApiTags('Admin — Users')
 @Controller('admin/users')
@@ -25,30 +33,51 @@ export class AdminUsersController {
   constructor(private readonly usersService: AdminUsersService) {}
 
   @Get()
-  @ApiOperation({ summary: '[Admin] List all users, optionally filtered by role' })
+  @ApiOperation({
+    summary: '[Admin] List all users, optionally filtered by role',
+  })
   @ApiQuery({ name: 'role', enum: Role, required: false })
+  @ApiResponse({ status: 200, description: 'Paginated user list' })
   getUsers(@Query() pagination: PaginationDto, @Query('role') role?: Role) {
-    return this.usersService.getUsers(pagination, role);
+    // FIX C3: was usersService.getUsers(pagination, role) — role positional arg silently ignored.
+    // Now wraps role in a UserFilters object as the service signature requires.
+    return this.usersService.getUsers(pagination, { role });
+  }
+
+  @Get('stats')
+  @ApiOperation({ summary: '[Admin] User counts grouped by role and status' })
+  getStats() {
+    return this.usersService.getStats();
   }
 
   @Get(':id')
   @ApiOperation({ summary: '[Admin] Get full user profile with relations' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   getUser(@Param('id', ParseUUIDPipe) id: string) {
     return this.usersService.getUser(id);
   }
 
   @Put(':id/suspend')
   @ApiOperation({ summary: '[Admin] Suspend user account — notifies user' })
+  @ApiResponse({ status: 409, description: 'Already suspended or is an admin' })
   suspendUser(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body('reason') reason?: string,
+    @Body() dto: SuspendUserDto,
+    @CurrentUser() admin: AuthUser,
   ) {
-    return this.usersService.suspendUser(id, reason);
+    return this.usersService.suspendUser(id, {
+      adminId: admin.sub,
+      reason: dto.reason,
+    });
   }
 
   @Put(':id/reinstate')
   @ApiOperation({ summary: '[Admin] Reinstate suspended user — notifies user' })
-  reinstateUser(@Param('id', ParseUUIDPipe) id: string) {
-    return this.usersService.reinstateUser(id);
+  @ApiResponse({ status: 409, description: 'User is already active' })
+  reinstateUser(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() admin: AuthUser,
+  ) {
+    return this.usersService.reinstateUser(id, { adminId: admin.sub });
   }
 }

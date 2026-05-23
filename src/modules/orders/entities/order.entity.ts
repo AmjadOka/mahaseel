@@ -8,7 +8,7 @@ import {
   OneToOne,
   JoinColumn,
 } from 'typeorm';
-import { SaleMethod, Unit } from '../../../common/enums/Unit.enum.ts';
+import { SaleMethod, Unit } from '../../../common/enums/Unit.enum.js';
 import {
   DeliveryStatus,
   OrderStatus,

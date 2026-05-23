@@ -46,7 +46,7 @@ import {
 } from 'src/common/enums/order-status.enum';
 import { PaymentStatus } from 'src/common/enums/payment.enum';
 import { ProductStatus } from 'src/common/enums/product.enum';
-import { SaleMethod } from 'src/common/enums/Unit.enum.ts';
+import { SaleMethod } from 'src/common/enums/Unit.enum';
 import { NotificationType } from 'src/common/enums/notification.enum';
 
 // ─── Inline Stripe type helpers ──────────────────────────────────────────────

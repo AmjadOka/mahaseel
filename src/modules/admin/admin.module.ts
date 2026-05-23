@@ -8,6 +8,7 @@ import { User } from '../users/entities/user.entity';
 import { Order } from '../orders/entities/order.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Product } from '../products/entities/product.entity';
+import { AdminAuditLog } from './entities/admin-audit-log.entity'; // ← NEW
 
 // ─── Domain modules ───────────────────────────────────────────────────────────
 import { FarmsModule } from '../farms/farms.module';
@@ -26,6 +27,7 @@ import { AdminOrdersService } from './services/admin-orders.service';
 import { AdminProductsService } from './services/admin-products.service';
 import { AdminReportsService } from './services/admin-reports.service';
 import { AdminNotificationsService } from './services/admin-notifications.service';
+import { AdminAuditService } from './services/admin-audit.service';
 
 // ─── Controllers ──────────────────────────────────────────────────────────────
 import { AdminDashboardController } from './controllers/admin-dashboard.controller';
@@ -36,12 +38,10 @@ import { AdminOrdersController } from './controllers/admin-orders.controller';
 import { AdminProductsController } from './controllers/admin-products.controller';
 import { AdminReportsController } from './controllers/admin-reports.controller';
 import { AdminNotificationsController } from './controllers/admin-notifications.controller';
+import { AdminAuditController } from './controllers/admin-audit.controller';
 
 @Module({
   imports: [
-    // Register all entities this module queries directly.
-    // Entities owned by other modules are accessed through
-    // their exported services — not duplicated here.
     TypeOrmModule.forFeature([
       Farm,
       WithdrawalRequest,
@@ -49,15 +49,15 @@ import { AdminNotificationsController } from './controllers/admin-notifications.
       Order,
       Payment,
       Product,
+      AdminAuditLog,
     ]),
 
-    // Domain modules — provide their exported services
-    FarmsModule,        // FarmsService (approve/reject logic)
-    WalletModule,       // WalletService (processWithdrawal)
-    UsersModule,        // UsersService (if needed downstream)
-    OrdersModule,       // OrdersService (relations, entity access)
-    ProductsModule,     // ProductsService (relations)
-    NotificationsModule, // NotificationsService (notify/broadcast)
+    FarmsModule,
+    WalletModule,
+    UsersModule,
+    OrdersModule,
+    ProductsModule,
+    NotificationsModule,
   ],
 
   providers: [
@@ -69,6 +69,7 @@ import { AdminNotificationsController } from './controllers/admin-notifications.
     AdminProductsService,
     AdminReportsService,
     AdminNotificationsService,
+    AdminAuditService,
   ],
 
   controllers: [
@@ -80,6 +81,7 @@ import { AdminNotificationsController } from './controllers/admin-notifications.
     AdminProductsController,
     AdminReportsController,
     AdminNotificationsController,
+    AdminAuditController,
   ],
 })
 export class AdminModule {}

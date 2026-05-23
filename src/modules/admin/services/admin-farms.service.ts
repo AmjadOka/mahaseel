@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -8,6 +8,7 @@ import {
   FarmsService,
   RejectionPayload,
 } from '../../farms/farms.service';
+import { AdminAuditService } from './admin-audit.service';
 
 import { FarmStatus } from 'src/common/enums/farm.enum';
 import { PaginationDto } from '../../../common/dto/pagination.dto';
@@ -18,6 +19,7 @@ export class AdminFarmsService {
   constructor(
     @InjectRepository(Farm) private readonly farmsRepo: Repository<Farm>,
     private readonly farmsService: FarmsService,
+    private readonly auditService: AdminAuditService,
   ) {}
 
   // ── Queries ────────────────────────────────────────────────────────────────
@@ -28,7 +30,7 @@ export class AdminFarmsService {
       .leftJoinAndSelect('f.owner', 'owner')
       .where('f.status = :status', { status: FarmStatus.PENDING })
       .andWhere('f.isDeleted = false')
-      .orderBy('f.createdAt', 'ASC'); // oldest first → review queue order
+      .orderBy('f.createdAt', 'ASC');
     return paginate(qb, Number(pagination.page), Number(pagination.limit));
   }
 
@@ -44,7 +46,6 @@ export class AdminFarmsService {
       .orderBy('f.createdAt', 'DESC');
 
     if (status) qb.andWhere('f.status = :status', { status });
-
     if (search) {
       qb.andWhere('(f.name ILIKE :q OR f.location ILIKE :q)', {
         q: `%${search}%`,
@@ -64,25 +65,90 @@ export class AdminFarmsService {
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
-  // Notification is already sent inside FarmsService.approveFarm —
-
   async approveFarm(id: string, payload: ApprovalPayload) {
-    return this.farmsService.approveFarm(id, payload);
+    const farm = await this.farmsService.findOne(id);
+
+    if (farm.status !== FarmStatus.PENDING) {
+      throw new ConflictException(
+        `Farm is already ${farm.status} and cannot be approved again.`,
+      );
+    }
+
+    const result = await this.farmsService.approveFarm(id, payload);
+
+    await this.auditService.log({
+      adminId: payload.adminId,
+      action: 'APPROVE_FARM',
+      resourceType: 'farm',
+      resourceId: id,
+      meta: { farmName: farm.name, ownerId: farm.ownerId },
+    });
+
+    return result;
   }
 
   async rejectFarm(id: string, payload: RejectionPayload) {
-    return this.farmsService.rejectFarm(id, payload);
+    const farm = await this.farmsService.findOne(id);
+
+    if (farm.status !== FarmStatus.PENDING) {
+      throw new ConflictException(
+        `Farm is already ${farm.status} and cannot be rejected again.`,
+      );
+    }
+
+    const result = await this.farmsService.rejectFarm(id, payload);
+
+    await this.auditService.log({
+      adminId: payload.adminId,
+      action: 'REJECT_FARM',
+      resourceType: 'farm',
+      resourceId: id,
+      reason: payload.reason,
+      meta: { farmName: farm.name, ownerId: farm.ownerId },
+    });
+
+    return result;
   }
 
   async suspendFarm(id: string, payload: RejectionPayload) {
-    return this.farmsService.suspendFarm(id, payload);
+    const result = await this.farmsService.suspendFarm(id, payload);
+
+    await this.auditService.log({
+      adminId: payload.adminId,
+      action: 'SUSPEND_FARM',
+      resourceType: 'farm',
+      resourceId: id,
+      reason: payload.reason,
+    });
+
+    return result;
   }
 
   async unsuspendFarm(id: string, payload: ApprovalPayload) {
-    return this.farmsService.unsuspendFarm(id, payload);
+    const result = await this.farmsService.unsuspendFarm(id, payload);
+
+    await this.auditService.log({
+      adminId: payload.adminId,
+      action: 'UNSUSPEND_FARM',
+      resourceType: 'farm',
+      resourceId: id,
+    });
+
+    return result;
   }
 
   async hardDelete(id: string, adminId: string) {
-    return this.farmsService.hardDelete(id, adminId);
+    const farm = await this.farmsService.findOne(id);
+    const result = await this.farmsService.hardDelete(id, adminId);
+
+    await this.auditService.log({
+      adminId,
+      action: 'HARD_DELETE_FARM',
+      resourceType: 'farm',
+      resourceId: id,
+      meta: { farmName: farm.name, ownerId: farm.ownerId },
+    });
+
+    return result;
   }
 }

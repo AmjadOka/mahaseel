@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 
 import { Payment } from '../../payments/entities/payment.entity';
 import { PaymentStatus } from 'src/common/enums/payment.enum';
-import { SaleMethod } from 'src/common/enums/Unit.enum.ts';
+import { SaleMethod } from 'src/common/enums/Unit.enum';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,7 +56,6 @@ export class AdminReportsService {
 
   /**
    * Revenue grouped by calendar day.
-   * Optionally filtered by a date range.
    */
   async getDailyRevenue(
     filters: ReportFilters = {},
@@ -94,8 +93,7 @@ export class AdminReportsService {
 
   /**
    * Revenue grouped by month for a given year (defaults to current year).
-   * Returns all 12 months with zero values for months with no revenue
-   * so charts don't have gaps.
+   * Returns all 12 months — zero-fills gaps so charts are always complete.
    */
   async getMonthlySummary(year?: number): Promise<MonthlyRevenueRow[]> {
     const targetYear = year ?? new Date().getFullYear();
@@ -118,7 +116,6 @@ export class AdminReportsService {
         orderCount: string;
       }>();
 
-    // Fill in missing months with zeroes so chart data is always 12 points
     const monthMap = new Map(rows.map((r) => [r.month, r]));
     const result: MonthlyRevenueRow[] = [];
 
@@ -140,7 +137,6 @@ export class AdminReportsService {
 
   /**
    * Top N merchants ranked by total revenue.
-   * Includes their platform fee contribution for the period.
    */
   async getTopMerchants(
     filters: ReportFilters = {},
@@ -183,10 +179,6 @@ export class AdminReportsService {
 
   // ── Revenue Breakdown by Sale Method ──────────────────────────────────────
 
-  /**
-   * Splits total revenue into fixed-price vs auction.
-   * Useful for understanding platform composition.
-   */
   async getRevenueBreakdown(
     filters: ReportFilters = {},
   ): Promise<RevenueBreakdown> {

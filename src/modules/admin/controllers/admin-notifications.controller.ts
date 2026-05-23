@@ -1,15 +1,17 @@
+import { Controller, Post, Body, UseGuards } from '@nestjs/common';
 import {
-  Controller,
-  Post,
-  Body,
-  UseGuards,
-} from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+} from '@nestjs/swagger';
 
 import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../../../common/guards/admin.guard';
-import { AdminNotificationsService } from '../services/admin-notifications.service';
 import { BroadcastNotificationDto } from '../dto/index';
+import { AdminNotificationsService } from '../services/admin-notifications.service';
+import { CurrentUser } from 'src/common/decorators';
+import type { AuthUser } from 'src/common/types';
 
 @ApiTags('Admin — Notifications')
 @Controller('admin/notifications')
@@ -25,7 +27,14 @@ export class AdminNotificationsController {
     summary:
       '[Admin] Broadcast a notification — to specific users, a role, or everyone',
   })
-  broadcast(@Body() dto: BroadcastNotificationDto) {
-    return this.notificationsService.broadcast(dto);
+  @ApiResponse({
+    status: 201,
+    description: 'Returns sent/failed counts and target summary',
+  })
+  broadcast(
+    @Body() dto: BroadcastNotificationDto,
+    @CurrentUser() admin: AuthUser,
+  ) {
+    return this.notificationsService.broadcast(dto, admin.sub, admin.phone);
   }
 }

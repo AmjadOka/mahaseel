@@ -10,10 +10,14 @@ import { NotificationsService } from '../../notifications/services/notifications
 import { NotificationType } from 'src/common/enums/notification.enum';
 import { PaginationDto } from '../../../common/dto/pagination.dto';
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
 export interface DeactivatePayload {
   adminId: string;
   reason: string;
 }
+
+// ─── Service ──────────────────────────────────────────────────────────────────
 
 @Injectable()
 export class AdminProductsService {
@@ -50,9 +54,9 @@ export class AdminProductsService {
   /**
    * Deactivates a product listing.
    * Delegates state change to ProductsService, then notifies the merchant.
-   * Notification is NOT inside ProductsService because deactivation is
-   * an admin-only action — merchant actions (softDelete, update) have
-   * their own notification patterns.
+   * Notification lives here (not in ProductsService) because deactivation
+   * is an admin-only action — merchant-side mutations have their own
+   * notification patterns.
    */
   async deactivateProduct(id: string, payload: DeactivatePayload) {
     const product = await this.productsService.deactivate(
@@ -80,7 +84,7 @@ export class AdminProductsService {
 
   /**
    * Reactivates a previously deactivated product.
-   * Notifies merchant so they know it's live again.
+   * Notifies merchant so they know their listing is live again.
    */
   async reactivateProduct(id: string, adminId: string) {
     const product = await this.productsService.reactivate(id, adminId);
