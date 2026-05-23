@@ -9,8 +9,18 @@ import {
   HttpCode,
   HttpStatus,
   Req,
+  ParseUUIDPipe,
+  Put,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiConsumes,
+  ApiBody,
+} from '@nestjs/swagger';
 
 import { AuctionsService } from './auctions.service';
 import { PlaceBidDto } from './dto/create-bid.dto';
@@ -19,6 +29,9 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { Role } from 'src/common/enums/role.enum';
 import type { AuthUser } from 'src/common/types';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { FileValidationPipe } from '../upload/validation.pipe';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BUYER — /auctions/bids
@@ -101,5 +114,37 @@ export class AuctionMerchantController {
   @ApiOperation({ summary: 'Accept a bid — closes auction and credits wallet' })
   acceptBid(@Param('bidId') bidId: string, @CurrentUser() user: AuthUser) {
     return this.auctionsService.acceptBid(bidId, user.sub);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 3. AuctionsController — add the two endpoints
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  @Put(':productId/image')
+  @ApiOperation({ summary: 'Upload or replace the auction cover image' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  uploadImage(
+    @Param('productId', ParseUUIDPipe) productId: string,
+    @CurrentUser() user: AuthUser,
+    @UploadedFile(FileValidationPipe) file: Express.Multer.File,
+  ) {
+    return this.auctionsService.uploadImage(productId, user.sub, file);
+  }
+
+  @Delete(':productId/image')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Remove the auction cover image' })
+  removeImage(
+    @Param('productId', ParseUUIDPipe) productId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.auctionsService.removeImage(productId, user.sub);
   }
 }

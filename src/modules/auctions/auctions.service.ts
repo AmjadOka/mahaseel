@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan, DataSource } from 'typeorm';
-import { ConfigService } from '@nestjs/config';
 
 import { AuctionBid } from './entities/auction-bid.entity';
 import { PlaceBidDto } from './dto/create-bid.dto';
@@ -22,6 +21,7 @@ import { ProductStatus } from 'src/common/enums/product.enum';
 import { BidStatus } from 'src/common/enums/bid.enum';
 import { NotificationType } from 'src/common/enums/notification.enum';
 import { SaleMethod } from 'src/common/enums/Unit.enum';
+import { UploadService } from '../upload/upload.service';
 
 type LoserRow = { buyerId: string };
 
@@ -38,7 +38,7 @@ export class AuctionsService {
     private auctionsGateway: AuctionsGateway,
     private paymentsService: PaymentsService,
     private ordersService: OrdersService,
-    private config: ConfigService,
+    private readonly uploadService: UploadService,
     private dataSource: DataSource,
   ) {}
 
@@ -581,6 +581,67 @@ export class AuctionsService {
       where: { buyerId, status: BidStatus.ACTIVE },
       relations: ['product', 'product.media'],
       order: { createdAt: 'DESC' },
+    });
+  }
+
+  /**
+   * Uploads or replaces the cover image for an auction product.
+   * Validates the product is an auction and belongs to the merchant.
+   */
+  async uploadImage(
+    productId: string,
+    merchantId: string,
+    file: Express.Multer.File,
+  ): Promise<Product> {
+    const product = await this.productsRepo.findOne({
+      where: { id: productId },
+    });
+    if (!product) throw new NotFoundException('Product not found');
+
+    if (product.merchantId !== merchantId) {
+      throw new ForbiddenException('You do not own this product');
+    }
+
+    if (product.saleMethod !== SaleMethod.AUCTION) {
+      throw new BadRequestException('Product is not an auction');
+    }
+
+    const uploaded = product.auctionImagePublicId
+      ? await this.uploadService.replace(
+          file,
+          'auction',
+          product.auctionImagePublicId,
+        )
+      : await this.uploadService.upload(file, 'auction');
+
+    await this.productsRepo.update(productId, {
+      auctionImageUrl: uploaded.url,
+      auctionImagePublicId: uploaded.publicId,
+    });
+
+    return this.productsRepo.findOne({ where: { id: productId } });
+  }
+
+  /** Removes the auction cover image from Cloudinary and clears DB fields. */
+  async removeImage(productId: string, merchantId: string): Promise<void> {
+    const product = await this.productsRepo.findOne({
+      where: { id: productId },
+    });
+    if (!product) throw new NotFoundException('Product not found');
+
+    if (product.merchantId !== merchantId) {
+      throw new ForbiddenException('You do not own this product');
+    }
+
+    if (!product.auctionImagePublicId) {
+      throw new BadRequestException('No image to remove');
+    }
+
+    await this.uploadService.delete(product.auctionImagePublicId);
+
+    await this.productsRepo.update(productId, {
+      auctionImageUrl: null,
+      auctionImagePublicId: null,
     });
   }
 }

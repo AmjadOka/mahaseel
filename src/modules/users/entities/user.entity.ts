@@ -60,6 +60,9 @@ export class User {
   })
   profileImage: string | null;
 
+  @Column({ nullable: true })
+  avatarPublicId: string | null;
+
   /* =====================================================
       AUTH
   ===================================================== */

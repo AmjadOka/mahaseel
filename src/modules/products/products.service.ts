@@ -19,9 +19,6 @@ import {
 } from './dto/create-product.dto';
 
 import { FarmsService } from '../farms/farms.service';
-
-import { paginate } from '../../shared/pagination/pagination.helper';
-
 import { FarmStatus } from 'src/common/enums/farm.enum';
 
 import { ProductStatus } from 'src/common/enums/product.enum';
@@ -30,6 +27,8 @@ import { SaleMethod } from 'src/common/enums/Unit.enum';
 
 import { MediaType } from 'src/common/enums/platform.enum';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
+import { paginate } from 'src/shared/pagination/pagination.helper';
+import { UploadService } from '../upload/upload.service';
 export interface ProductFilters {
   status?: ProductStatus;
   saleMethod?: SaleMethod;
@@ -59,6 +58,7 @@ export class ProductsService {
     @InjectRepository(ProductMedia)
     private readonly mediaRepo: Repository<ProductMedia>,
 
+    private readonly uploadService: UploadService,
     private readonly farmsService: FarmsService,
   ) {}
 
@@ -275,6 +275,22 @@ export class ProductsService {
   |--------------------------------------------------------------------------
   */
 
+  // ── Add to ProductsService constructor ────────────────────────────────────────
+  //
+  // constructor(
+  //   ...
+  //   private readonly uploadService: UploadService,
+  // ) {}
+
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Uploads multiple images/videos to Cloudinary in parallel,
+   * then persists a ProductMedia row for each one.
+   *
+   * sortOrder reflects the order files were sent — the client
+   * controls display order by reordering the multipart array.
+   */
   async uploadMedia(
     productId: string,
     merchantId: string,
@@ -286,16 +302,19 @@ export class ProductsService {
       throw new BadRequestException('No files uploaded');
     }
 
-    const mediaEntities = files.map((file, index) =>
+    // Upload all files to Cloudinary concurrently
+    const uploaded = await Promise.all(
+      files.map((file) => this.uploadService.upload(file, 'product')),
+    );
+
+    const mediaEntities = uploaded.map((asset, index) =>
       this.mediaRepo.create({
         productId,
-
-        url: file.path,
-
-        mediaType: file.mimetype.startsWith('video')
+        url: asset.url,
+        publicId: asset.publicId,
+        mediaType: files[index].mimetype.startsWith('video/')
           ? MediaType.VIDEO
           : MediaType.IMAGE,
-
         sortOrder: index,
       }),
     );
@@ -303,12 +322,11 @@ export class ProductsService {
     return this.mediaRepo.save(mediaEntities);
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Delete Media
-  |--------------------------------------------------------------------------
-  */
-
+  /**
+   * Deletes a media row from the DB and its asset from Cloudinary.
+   * Cloudinary deletion is fire-and-forget — a failed CDN delete
+   * never blocks the DB row removal.
+   */
   async deleteMedia(
     productId: string,
     mediaId: string,
@@ -317,26 +335,27 @@ export class ProductsService {
     await this.validateOwnership(productId, merchantId);
 
     const media = await this.mediaRepo.findOne({
-      where: {
-        id: mediaId,
-        productId,
-      },
+      where: { id: mediaId, productId },
     });
 
     if (!media) {
       throw new NotFoundException('Media not found');
     }
 
+    // Delete from Cloudinary first (non-blocking on failure)
+    if (media.publicId) {
+      await this.uploadService.delete(media.publicId);
+    }
+
     await this.mediaRepo.delete(mediaId);
   }
-
   /*
   |--------------------------------------------------------------------------
   | Market Search
   |--------------------------------------------------------------------------
   */
 
-  async searchMarket(filter: FilterMarketDto) {
+  searchMarket(filter: FilterMarketDto) {
     const {
       q,
       categoryId,
@@ -486,7 +505,7 @@ export class ProductsService {
   /**
    * Admin paginated list with full filter set.
    */
-  async findAllAdmin(pagination: PaginationDto, filters: ProductFilters = {}) {
+  findAllAdmin(pagination: PaginationDto, filters: ProductFilters = {}) {
     const qb = this.repo
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.media', 'media')
@@ -569,7 +588,7 @@ export class ProductsService {
   /**
    * Admin: live auction products only — sorted by soonest expiry.
    */
-  async getLiveAuctions(pagination: PaginationDto) {
+  getLiveAuctions(pagination: PaginationDto) {
     const qb = this.repo
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.merchant', 'merchant')
