@@ -14,7 +14,10 @@ import { FarmStatus } from 'src/common/enums/farm.enum';
 import { NotificationsService } from '../notifications/services/notifications.service';
 import { NotificationType } from 'src/common/enums/notification.enum';
 import { UploadService } from '../upload/upload.service';
+<<<<<<< HEAD
 import { MediaType } from 'src/common/enums/platform.enum';
+=======
+>>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
 // import { StorageService } from '../../shared/storage/storage.service';
 
 // ─── DTOs / Types ────────────────────────────────────────────────────────────

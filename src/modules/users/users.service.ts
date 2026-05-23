@@ -170,8 +170,13 @@ export class UsersService {
     }
 
     await this.repo.update(id, {
+<<<<<<< HEAD
       profileImage: undefined,
       avatarPublicId: undefined,
+=======
+      profileImage: null,
+      avatarPublicId: null,
+>>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
     });
 
     return this.findById(id);

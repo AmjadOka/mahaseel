@@ -4,11 +4,16 @@ import {
   Logger,
   InternalServerErrorException,
 } from '@nestjs/common';
+<<<<<<< HEAD
 import {
   v2 as cloudinary,
   UploadApiOptions,
   UploadApiResponse,
 } from 'cloudinary';
+=======
+import { v2 as cloudinary, UploadApiResponse } from 'cloudinary';
+import { Readable } from 'stream';
+>>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
 
 import { CLOUDINARY } from './cloudinary.provider';
 import { UploadResultDto } from './dto/result.dto';
@@ -87,7 +92,11 @@ export class UploadService {
 
   private streamToCloudinary(
     buffer: Buffer,
+<<<<<<< HEAD
     options: UploadApiOptions, // ✅ explicit instead of Parameters<>
+=======
+    options: Parameters<typeof cloudinary.uploader.upload_stream>[0],
+>>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
   ): Promise<UploadApiResponse> {
     return new Promise((resolve, reject) => {
       const uploadStream = this.cloudinaryClient.uploader.upload_stream(
@@ -105,7 +114,11 @@ export class UploadService {
         },
       );
 
+<<<<<<< HEAD
       uploadStream.end(buffer);
+=======
+      Readable.from(buffer).pipe(uploadStream);
+>>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
     });
   }
 

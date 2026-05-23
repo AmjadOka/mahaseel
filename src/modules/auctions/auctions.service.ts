@@ -619,11 +619,15 @@ export class AuctionsService {
       auctionImagePublicId: uploaded.publicId,
     });
 
+<<<<<<< HEAD
     const updatedProduct = await this.productsRepo.findOne({
       where: { id: productId },
     });
     if (!updatedProduct) throw new NotFoundException();
     return updatedProduct;
+=======
+    return this.productsRepo.findOne({ where: { id: productId } });
+>>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
   }
 
   /** Removes the auction cover image from Cloudinary and clears DB fields. */
@@ -644,8 +648,13 @@ export class AuctionsService {
     await this.uploadService.delete(product.auctionImagePublicId);
 
     await this.productsRepo.update(productId, {
+<<<<<<< HEAD
       auctionImageUrl: undefined,
       auctionImagePublicId: undefined,
+=======
+      auctionImageUrl: null,
+      auctionImagePublicId: null,
+>>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
     });
   }
 }
