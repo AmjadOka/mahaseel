@@ -108,6 +108,13 @@ export class Product {
     nullable: true,
   })
   auctionDurationHours: number | null;
+
+  @Column({ name: 'auction_image_url', nullable: true })
+  auctionImageUrl: string | null;
+
+  @Column({ name: 'auction_image_public_id', nullable: true })
+  auctionImagePublicId: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
@@ -142,6 +149,9 @@ export class ProductMedia {
 
   @Column()
   url: string;
+
+  @Column({ name: 'public_id', nullable: true })
+  publicId: string | null;
 
   @Column({
     name: 'media_type',

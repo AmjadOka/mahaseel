@@ -7,12 +7,13 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, FindOptionsWhere, ILike } from 'typeorm';
-import { Farm } from './entities/farm.entity';
+import { Repository, FindOptionsWhere, ILike } from 'typeorm';
+import { Farm, FarmMedia } from './entities/farm.entity';
 import { CreateFarmDto, UpdateFarmDto } from './dto/create-farm.dto';
 import { FarmStatus } from 'src/common/enums/farm.enum';
 import { NotificationsService } from '../notifications/services/notifications.service';
 import { NotificationType } from 'src/common/enums/notification.enum';
+import { UploadService } from '../upload/upload.service';
 // import { StorageService } from '../../shared/storage/storage.service';
 
 // ─── DTOs / Types ────────────────────────────────────────────────────────────
@@ -65,8 +66,9 @@ export class FarmsService {
   constructor(
     @InjectRepository(Farm) private readonly farmRepo: Repository<Farm>,
     private readonly notificationsService: NotificationsService,
-    private readonly dataSource: DataSource,
-    // private readonly storage: StorageService,
+    @InjectRepository(FarmMedia)
+    private readonly mediaRepo: Repository<FarmMedia>,
+    private readonly uploadService: UploadService,
   ) {}
 
   // ── Create ──────────────────────────────────────────────────────────────────
@@ -397,6 +399,81 @@ export class FarmsService {
   }
 
   /**
+   * Uploads multiple images/videos for a farm in parallel.
+   * Validates ownership before touching storage.
+   */
+  async uploadMedia(
+    farmId: string,
+    merchantId: string,
+    files: Express.Multer.File[],
+  ): Promise<FarmMedia[]> {
+    await this.validateOwnership(farmId, merchantId);
+
+    if (!files?.length) {
+      throw new BadRequestException('No files uploaded');
+    }
+
+    const uploaded = await Promise.all(
+      files.map((file) => this.uploadService.upload(file, 'farm')),
+    );
+
+    const mediaEntities = uploaded.map((asset, index) =>
+      this.mediaRepo.create({
+        farmId,
+        url: asset.url,
+        publicId: asset.publicId,
+        mediaType: files[index].mimetype.startsWith('video/')
+          ? MediaType.VIDEO
+          : MediaType.IMAGE,
+        sortOrder: index,
+      }),
+    );
+
+    return this.mediaRepo.save(mediaEntities);
+  }
+
+  /**
+   * Deletes a single media row and its Cloudinary asset.
+   */
+  async deleteMedia(
+    farmId: string,
+    mediaId: string,
+    merchantId: string,
+  ): Promise<void> {
+    await this.validateOwnership(farmId, merchantId);
+
+    const media = await this.mediaRepo.findOne({
+      where: { id: mediaId, farmId },
+    });
+
+    if (!media) {
+      throw new NotFoundException('Media not found');
+    }
+
+    if (media.publicId) {
+      await this.uploadService.delete(media.publicId);
+    }
+
+    await this.mediaRepo.delete(mediaId);
+  }
+
+  /**
+   * Deletes ALL media for a farm — call this inside your deleteFarm() method
+   * so Cloudinary assets are cleaned up when a farm is removed.
+   */
+  async deleteAllMedia(farmId: string): Promise<void> {
+    const allMedia = await this.mediaRepo.find({ where: { farmId } });
+
+    await Promise.all(
+      allMedia
+        .filter((m) => m.publicId)
+        .map((m) => this.uploadService.delete(m.publicId!)),
+    );
+
+    await this.mediaRepo.delete({ farmId });
+  }
+
+  /**
    * Admin hard-delete (permanent). Use with caution.
    */
   async hardDelete(farmId: string, adminId: string): Promise<void> {
@@ -486,5 +563,33 @@ export class FarmsService {
         `You already have a farm named "${name}". Please choose a different name.`,
       );
     }
+  }
+
+  /**
+   * Confirms the farm exists and belongs to the requesting merchant.
+   * Throws before any mutation touches storage or the DB.
+   *
+   * @throws NotFoundException   – farm does not exist or is soft-deleted
+   * @throws ForbiddenException  – farm exists but belongs to a different owner
+   */
+  private async validateOwnership(
+    farmId: string,
+    merchantId: string,
+  ): Promise<Farm> {
+    const farm = await this.farmRepo.findOne({
+      where: { id: farmId, isDeleted: false },
+    });
+
+    if (!farm) {
+      throw new NotFoundException('Farm not found');
+    }
+
+    if (farm.ownerId !== merchantId) {
+      throw new ForbiddenException(
+        'You do not have permission to modify this farm',
+      );
+    }
+
+    return farm;
   }
 }

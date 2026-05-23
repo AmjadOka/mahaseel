@@ -3,12 +3,18 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  UpdateDateColumn,
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
 import { BidStatus } from 'src/common/enums/bid.enum';
 import { User } from '../../users/entities/user.entity';
 import { Product } from '../../products/entities/product.entity';
+
+const decimalTransformer = {
+  to: (v: number) => v,
+  from: (v: string) => parseFloat(v),
+};
 
 @Entity('auction_bids')
 export class AuctionBid {
@@ -21,17 +27,30 @@ export class AuctionBid {
   @Column({ name: 'buyer_id' })
   buyerId: string;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    transformer: decimalTransformer,
+  })
   amount: number;
 
   @Column({ type: 'enum', enum: BidStatus, default: BidStatus.ACTIVE })
   status: BidStatus;
 
+  @Column({ name: 'is_winning', default: false })
+  isWinning: boolean;
+
   @Column({ name: 'ip_address', nullable: true })
-  ipAddress: string;
+  ipAddress: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
+
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────────
 
   @ManyToOne(() => Product, (p) => p.bids)
   @JoinColumn({ name: 'product_id' })

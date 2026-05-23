@@ -5,6 +5,8 @@ import {
   ManyToOne,
   OneToMany,
   JoinColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
 } from 'typeorm';
 import { Product } from '../../products/entities/product.entity';
 
@@ -17,16 +19,20 @@ export class Category {
   nameAr: string;
 
   @Column({ name: 'name_en', length: 100, nullable: true })
-  nameEn: string;
+  nameEn: string | null;
 
-  @Column({ nullable: true })
-  slug: string;
+  @Column({ unique: true, nullable: true })
+  slug: string | null;
 
   @Column({ name: 'icon_url', nullable: true })
-  iconUrl: string;
+  iconUrl: string | null;
+
+  /** Cloudinary public_id — required to replace or delete the icon asset */
+  @Column({ name: 'icon_public_id', nullable: true })
+  iconPublicId: string | null;
 
   @Column({ name: 'parent_id', nullable: true })
-  parentId: string;
+  parentId: string | null;
 
   @Column({ name: 'sort_order', default: 0 })
   sortOrder: number;
@@ -34,9 +40,17 @@ export class Category {
   @Column({ name: 'is_active', default: true })
   isActive: boolean;
 
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
+
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────────
+
   @ManyToOne(() => Category, (cat) => cat.children, { nullable: true })
   @JoinColumn({ name: 'parent_id' })
-  parent: Category;
+  parent: Category | null;
 
   @OneToMany(() => Category, (cat) => cat.parent)
   children: Category[];

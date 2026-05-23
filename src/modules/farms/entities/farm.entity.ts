@@ -11,6 +11,7 @@ import {
 import { FarmStatus } from 'src/common/enums/farm.enum';
 import { User } from '../../users/entities/user.entity';
 import { Product } from '../../products/entities/product.entity';
+import { MediaType } from 'src/common/enums/platform.enum';
 
 @Entity('farms')
 export class Farm {
@@ -80,4 +81,40 @@ export class Farm {
 
   @OneToMany(() => Product, (product) => product.farm)
   products: Product[];
+
+  @OneToMany(() => FarmMedia, (m) => m.farm, { cascade: true }) // ← was: ProductMedia / m.product
+  media: FarmMedia[];
+}
+
+@Entity('farm_media')
+export class FarmMedia {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column({ name: 'farm_id' })
+  farmId: string;
+
+  @Column()
+  url: string;
+
+  @Column({ name: 'public_id', nullable: true })
+  publicId: string | null;
+
+  @Column({
+    name: 'media_type',
+    type: 'enum',
+    enum: MediaType,
+    default: MediaType.IMAGE,
+  })
+  mediaType: MediaType;
+
+  @Column({ name: 'sort_order', default: 0 })
+  sortOrder: number;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
+
+  @ManyToOne(() => Farm, (f) => f.media, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'farm_id' })
+  farm: Farm;
 }

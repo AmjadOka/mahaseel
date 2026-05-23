@@ -9,6 +9,7 @@ import { Repository } from 'typeorm';
 
 import { User } from './entities/user.entity';
 import { Role } from 'src/common/enums/role.enum';
+import { UploadService } from '../upload/upload.service';
 // import { StorageService } from '../../shared/storage/storage.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ export class UsersService {
 
   constructor(
     @InjectRepository(User) private readonly repo: Repository<User>,
-    // private readonly storage: StorageService,
+    private readonly uploadService: UploadService,
   ) {}
 
   // ── Queries ────────────────────────────────────────────────────────────────
@@ -139,43 +140,23 @@ export class UsersService {
     return this.findById(id);
   }
 
-  /**
-   * Uploads a new avatar, stores it via StorageService, and updates the DB.
-   * Old avatar URL is replaced — storage cleanup can be added here when
-   * StorageService.delete() is available.
-   */
-  async uploadAvatar(
-    id: string,
-    buffer: Buffer,
-    originalName: string,
-    mimetype: string,
-  ): Promise<User> {
-    if (!mimetype.startsWith('image/')) {
-      throw new BadRequestException(
-        'Only image files are accepted for avatars',
-      );
-    }
+  async uploadAvatar(id: string, file: Express.Multer.File): Promise<User> {
+    const user = await this.findById(id);
 
-    await this.findById(id); // ensure user exists before uploading
+    const uploaded = user.avatarPublicId
+      ? await this.uploadService.replace(file, 'users', user.avatarPublicId)
+      : await this.uploadService.upload(file, 'users');
 
-    /* const url = await this.storage.upload(
-      buffer,
-      originalName,
-      'avatars',
-      mimetype,
-    );
-    await this.repo.update(id, { profileImage: url }); */
-
-    // TODO: uncomment above when StorageService is injected
-    this.logger.warn(
-      `uploadAvatar called for user [${id}] — storage not wired yet`,
-    );
+    await this.repo.update(id, {
+      profileImage: uploaded.url,
+      avatarPublicId: uploaded.publicId, // store for future replace/delete
+    });
 
     return this.findById(id);
   }
 
   /**
-   * Removes avatar and resets profileImage to null.
+   * Deletes the avatar from Cloudinary and resets profileImage to null.
    */
   async removeAvatar(id: string): Promise<User> {
     const user = await this.findById(id);
@@ -184,8 +165,14 @@ export class UsersService {
       throw new BadRequestException('No avatar to remove');
     }
 
-    // TODO: await this.storage.delete(user.profileImage);
-    await this.repo.update(id, { profileImage: null });
+    if (user.avatarPublicId) {
+      await this.uploadService.delete(user.avatarPublicId);
+    }
+
+    await this.repo.update(id, {
+      profileImage: null,
+      avatarPublicId: null,
+    });
 
     return this.findById(id);
   }

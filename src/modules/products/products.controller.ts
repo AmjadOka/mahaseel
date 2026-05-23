@@ -13,6 +13,7 @@ import {
   HttpCode,
   HttpStatus,
   ParseEnumPipe,
+  BadRequestException,
 } from '@nestjs/common';
 
 import {
@@ -20,6 +21,7 @@ import {
   ApiBearerAuth,
   ApiOperation,
   ApiConsumes,
+  ApiBody,
 } from '@nestjs/swagger';
 
 import { FilesInterceptor } from '@nestjs/platform-express';
@@ -37,6 +39,8 @@ import { Role } from 'src/common/enums/role.enum';
 import { ProductStatus } from 'src/common/enums/product.enum';
 
 import type { AuthUser } from 'src/common/types';
+import { FileValidationPipe } from '../upload/validation.pipe';
+import { memoryStorage } from 'multer';
 
 @ApiTags('products')
 @Controller('products')
@@ -122,14 +126,35 @@ export class ProductsController {
 
   @Post(':id/media')
   @Roles(Role.MERCHANT)
-  @UseInterceptors(FilesInterceptor('files', 10))
+  @ApiOperation({ summary: 'Upload product images/videos (max 10)' })
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Upload product images/video' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+        },
+      },
+    },
+  })
+  @UseInterceptors(
+    FilesInterceptor('files', 10, { storage: memoryStorage() }), // ← memoryStorage: file.buffer populated, never disk
+  )
   uploadMedia(
     @Param('id') id: string,
     @CurrentUser() user: AuthUser,
     @UploadedFiles() files: Express.Multer.File[],
   ) {
+    if (!files?.length) {
+      throw new BadRequestException('No files provided');
+    }
+
+    // Validate each file individually (type + size) before hitting Cloudinary
+    const pipe = new FileValidationPipe();
+    files.forEach((f) => pipe.transform(f));
+
     return this.productsService.uploadMedia(id, user.sub, files);
   }
 
