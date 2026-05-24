@@ -40,6 +40,6 @@ export class PaymentSchedular implements OnModuleInit {
       },
     );
 
-    this.logger.log('CLOSE_EXPIRED_PAYMENTS_JOB (every minute)');
+    this.logger.log('CLOSE_EXPIRED_PAYMENTS_JOB (every 30 minute)');
   }
 }

@@ -63,9 +63,6 @@ export class User {
   @Column({ nullable: true })
   avatarPublicId: string;
 
-  @Column({ nullable: true })
-  avatarPublicId: string | null;
-
   /* =====================================================
       AUTH
   ===================================================== */

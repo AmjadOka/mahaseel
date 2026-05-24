@@ -98,11 +98,7 @@ export class FarmMedia {
   url: string;
 
   @Column({ name: 'public_id', nullable: true })
-<<<<<<< HEAD
   publicId: string;
-=======
-  publicId: string | null;
->>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
 
   @Column({
     name: 'media_type',

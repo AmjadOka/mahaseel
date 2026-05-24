@@ -35,8 +35,12 @@ export class CategoriesService {
   /** Returns all active root categories with their immediate children. */
   async findAll(): Promise<Category[]> {
     const cached = await this.redis.get(CACHE_KEYS.all);
-    if (cached) return JSON.parse(cached) as Category[];
-    const categories = this.repo.find({
+    if (cached) {
+      console.log(cached, 'iuygfdfghjuu');
+      return JSON.parse(cached) as Category[];
+    }
+
+    const categories = await this.repo.find({
       where: { isActive: true, parentId: IsNull() },
       relations: ['children'],
       order: { sortOrder: 'ASC', nameAr: 'ASC' },
@@ -51,7 +55,10 @@ export class CategoriesService {
 
   async findOne(id: string): Promise<Category> {
     const cached = await this.redis.get(CACHE_KEYS.one(id));
-    if (cached) return JSON.parse(cached) as Category;
+    if (cached) {
+      console.log(cached, 'xxaxaxaxxaxaxaxa');
+      return JSON.parse(cached) as Category;
+    }
 
     const cat = await this.repo.findOne({
       where: { id, isActive: true },
@@ -87,7 +94,10 @@ export class CategoriesService {
     }
 
     Object.assign(cat, dto);
-    return this.repo.save(cat);
+    const saved = await this.repo.save(cat);
+
+    await this.invalidate(id);
+    return saved;
   }
 
   /** Soft-delete: sets isActive = false, never removes the row. */

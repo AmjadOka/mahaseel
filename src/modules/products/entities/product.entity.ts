@@ -107,7 +107,6 @@ export class Product {
     type: 'int',
     nullable: true,
   })
-<<<<<<< HEAD
   auctionDurationHours: number;
 
   @Column({ name: 'auction_image_url', type: 'varchar', nullable: true })
@@ -115,15 +114,6 @@ export class Product {
 
   @Column({ name: 'auction_image_public_id', type: 'varchar', nullable: true })
   auctionImagePublicId: string;
-=======
-  auctionDurationHours: number | null;
-
-  @Column({ name: 'auction_image_url', nullable: true })
-  auctionImageUrl: string | null;
-
-  @Column({ name: 'auction_image_public_id', nullable: true })
-  auctionImagePublicId: string | null;
->>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
@@ -160,13 +150,8 @@ export class ProductMedia {
   @Column()
   url: string;
 
-<<<<<<< HEAD
   @Column({ name: 'public_id', type: 'varchar', nullable: true })
   publicId: string;
-=======
-  @Column({ name: 'public_id', nullable: true })
-  publicId: string | null;
->>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
 
   @Column({
     name: 'media_type',

@@ -18,7 +18,6 @@ export class Category {
   @Column({ name: 'name_ar', length: 100 })
   nameAr: string;
 
-<<<<<<< HEAD
   @Column({ name: 'name_en', length: 100 })
   nameEn: string;
 
@@ -30,19 +29,6 @@ export class Category {
 
   /** Cloudinary public_id — required to replace or delete the icon asset */
   @Column({ name: 'icon_public_id', type: 'varchar', nullable: true })
-=======
-  @Column({ name: 'name_en', length: 100, nullable: true })
-  nameEn: string | null;
-
-  @Column({ unique: true, nullable: true })
-  slug: string | null;
-
-  @Column({ name: 'icon_url', nullable: true })
-  iconUrl: string | null;
-
-  /** Cloudinary public_id — required to replace or delete the icon asset */
-  @Column({ name: 'icon_public_id', nullable: true })
->>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
   iconPublicId: string | null;
 
   @Column({ name: 'parent_id', nullable: true })

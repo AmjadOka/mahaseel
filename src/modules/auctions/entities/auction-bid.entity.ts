@@ -41,13 +41,8 @@ export class AuctionBid {
   @Column({ name: 'is_winning', default: false })
   isWinning: boolean;
 
-<<<<<<< HEAD
   @Column({ name: 'ip_address', type: 'varchar', nullable: true })
   ipAddress: string;
-=======
-  @Column({ name: 'ip_address', nullable: true })
-  ipAddress: string | null;
->>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

@@ -47,7 +47,6 @@ export class NotificationsService {
    * The single entry point for all notifications across the app.
    *
    * - Always defaults to [IN_APP, PUSH] channels unless overridden.
-   * - titleAr / bodyAr are now forwarded all the way to the DB and FCM payload.
    * - Uses emitAsync so the listener awaits dispatch before the caller continues.
    */
   async notify(
@@ -174,7 +173,8 @@ export class NotificationsService {
     const cacheKey = CK.all(userId, page, limit);
 
     const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
+    if (cached)
+      return JSON.parse(cached) as { data: Notification[]; total: number };
 
     const [data, total] = await this.notificationRepo.findAndCount({
       where: { userId } as FindOptionsWhere<Notification>,
