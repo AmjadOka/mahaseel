@@ -19,7 +19,7 @@ const CACHE_KEYS = {
   one: (id: string) => `categories:${id}`,
 } as const;
 
-const CATEGORIES_TTL = 60 * 60; // 5 minutes
+const CATEGORIES_TTL = 60 * 60;
 
 @Injectable()
 export class CategoriesService {
@@ -114,6 +114,7 @@ export class CategoriesService {
    * Uploads or replaces the category icon.
    * Old Cloudinary asset is deleted only after the new one is confirmed.
    */
+
   async uploadIcon(id: string, file: Express.Multer.File): Promise<Category> {
     const cat = await this.findOne(id);
 

@@ -490,6 +490,7 @@ export class OrdersService {
         throw new ForbiddenException('Access denied');
       if (order.status !== OrderStatus.PENDING) {
         throw new BadRequestException(
+          console.log(order.status, 'sxxwxwwwswwww'),
           'Order cannot be accepted in its current state',
         );
       }

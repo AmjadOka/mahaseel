@@ -114,7 +114,17 @@ export class ProductsService {
 
   async create(merchantId: string, dto: CreateProductDto): Promise<Product> {
     const farm = await this.farmsService.findOne(dto.farmId, merchantId);
-
+    const productAvailable = await this.repo.findOne({
+      where: {
+        farmId: dto.farmId,
+        status: ProductStatus.ACTIVE,
+        isDeleted: false,
+        name: dto.name,
+      },
+    });
+    if (productAvailable) {
+      throw new BadRequestException('Product already exists');
+    }
     if (farm.status !== FarmStatus.APPROVED) {
       throw new BadRequestException(
         'Farm must be approved before listing products',
@@ -404,7 +414,7 @@ export class ProductsService {
 
     const cached = await this.redis.get(cacheKey);
     if (cached) {
-      return JSON.parse(cached);
+      return JSON.parse(cached) as Product[];
     }
 
     const {

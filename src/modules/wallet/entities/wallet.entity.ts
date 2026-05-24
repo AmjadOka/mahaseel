@@ -32,11 +32,9 @@ export class Wallet {
     precision: 12,
     scale: 2,
     default: 0,
-
     transformer: new DecimalTransformer(),
   })
-  availableBalance: number;
-
+  availableBalance: number = 0;
   @Column({
     name: 'pending_balance',
     type: 'decimal',

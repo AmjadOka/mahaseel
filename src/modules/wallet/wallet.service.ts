@@ -97,7 +97,7 @@ export class WalletService {
       type: WalletTransactionType.CREDIT,
       reason: WalletTransactionReason.ORDER_EARNING,
       amount,
-      balanceAfter: wallet.pendingBalance,
+      balanceAfter: Number(wallet.pendingBalance),
       referenceType: 'order',
       referenceId: orderId,
       notes: 'Pending hold',
