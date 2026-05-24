@@ -22,6 +22,26 @@ import {
   ReviewFlagDto,
   UpdateRatingDto,
 } from './dto/flag-rating.dto';
+import { RedisService } from 'src/shared/redis/redis.service';
+
+// ── Cache constants ────────────────────────────────────────────────────────────
+
+const TTL = {
+  rating: 60 * 10, // 10 min — single rating detail
+  list: 60 * 3, // 3 min  — paginated lists (can't bust all page variants)
+} as const;
+
+const CK = {
+  one: (id: string) => `ratings:one:${id}`,
+  byUser: (userId: string, page: number, limit: number) =>
+    `ratings:user:${userId}:${page}:${limit}`,
+  given: (reviewerId: string, page: number, limit: number) =>
+    `ratings:given:${reviewerId}:${page}:${limit}`,
+  // Cross-service: bust the users cache when ratingAvg/ratingCount change
+  userRow: (id: string) => `users:id:${id}`,
+  userPublic: (id: string) => `users:public:${id}`,
+  userStats: (id: string) => `users:stats:${id}`,
+} as const;
 
 @Injectable()
 export class RatingsService {
@@ -40,6 +60,7 @@ export class RatingsService {
 
     private readonly dataSource: DataSource,
     private readonly notificationsService: NotificationsService,
+    private readonly redis: RedisService,
   ) {}
 
   // ─── Create ───────────────────────────────────────────────────────────────
@@ -86,6 +107,7 @@ export class RatingsService {
     const reviewer = await this.usersRepo.findOne({
       where: { id: reviewerId },
     });
+
     await this.notificationsService.notify(reviewedId, {
       type: NotificationType.RATING_RECEIVED,
       title: 'New Rating Received ⭐',
@@ -115,25 +137,39 @@ export class RatingsService {
 
     Object.assign(rating, dto);
     const saved = await this.ratingsRepo.save(rating);
-    await this.recalculateRating(rating.reviewedId);
-
+    await Promise.all([
+      this.redis.del(CK.one(ratingId)),
+      this.recalculateRating(rating.reviewedId),
+    ]);
     return saved;
   }
 
   // ─── Find one ─────────────────────────────────────────────────────────────
 
   async findOne(id: string): Promise<Rating> {
+    const cached = await this.redis.get(CK.one(id));
+    if (cached) return JSON.parse(cached) as Rating;
+
     const rating = await this.ratingsRepo.findOne({
       where: { id },
       relations: ['reviewer', 'reviewed', 'order'],
     });
     if (!rating) throw new NotFoundException('Rating not found');
+    await this.redis.set(CK.one(id), JSON.stringify(rating), TTL.rating);
+
     return rating;
   }
 
   // ─── Ratings received by a user ───────────────────────────────────────────
 
   async getByUser(userId: string, pagination: PaginationDto) {
+    const page = Number(pagination.page);
+    const limit = Number(pagination.limit);
+
+    const cacheKey = CK.byUser(userId, page, limit);
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
     const qb = this.ratingsRepo
       .createQueryBuilder('r')
       .leftJoinAndSelect('r.reviewer', 'reviewer')
@@ -141,12 +177,21 @@ export class RatingsService {
       .where('r.reviewedId = :userId', { userId })
       .orderBy('r.createdAt', 'DESC');
 
-    return paginate(qb, Number(pagination.page), Number(pagination.limit));
+    const result = await paginate(qb, page, limit);
+    await this.redis.set(cacheKey, JSON.stringify(result), TTL.list);
+    return result;
   }
 
   // ─── Ratings submitted by the current user ────────────────────────────────
 
   async getGiven(reviewerId: string, pagination: PaginationDto) {
+    const page = Number(pagination.page);
+    const limit = Number(pagination.limit);
+    const cacheKey = CK.given(reviewerId, page, limit);
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
     const qb = this.ratingsRepo
       .createQueryBuilder('r')
       .leftJoinAndSelect('r.reviewed', 'reviewed')
@@ -154,7 +199,9 @@ export class RatingsService {
       .where('r.reviewerId = :reviewerId', { reviewerId })
       .orderBy('r.createdAt', 'DESC');
 
-    return paginate(qb, Number(pagination.page), Number(pagination.limit));
+    const result = await paginate(qb, page, limit);
+    await this.redis.set(cacheKey, JSON.stringify(result), TTL.list);
+    return result;
   }
 
   // ─── Flag a rating ────────────────────────────────────────────────────────
@@ -176,6 +223,7 @@ export class RatingsService {
     const existing = await this.flagsRepo.findOne({
       where: { ratingId, reporterId },
     });
+
     if (existing)
       throw new ConflictException('You have already flagged this rating');
 
@@ -231,7 +279,11 @@ export class RatingsService {
         });
       });
 
-      await this.recalculateRating(flag.rating.reviewedId);
+      // Recalculate after the transaction commits — this also busts user caches
+      await Promise.all([
+        this.redis.del(CK.one(flag.ratingId)),
+        this.recalculateRating(flag.rating.reviewedId),
+      ]);
 
       await this.notificationsService.notify(flag.reporterId, {
         type: NotificationType.RATING_RECEIVED,
@@ -283,5 +335,11 @@ export class RatingsService {
       ratingAvg: parseFloat(parseFloat(result?.avg ?? '0').toFixed(2)),
       ratingCount: parseInt(result?.count ?? '0', 10),
     });
+    // The user row changed — any cached copy is now stale
+    await Promise.all([
+      this.redis.del(CK.userRow(userId)),
+      this.redis.del(CK.userPublic(userId)),
+      this.redis.del(CK.userStats(userId)),
+    ]);
   }
 }

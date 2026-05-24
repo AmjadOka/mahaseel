@@ -29,6 +29,7 @@ import { MediaType } from 'src/common/enums/platform.enum';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { paginate } from 'src/shared/pagination/pagination.helper';
 import { UploadService } from '../upload/upload.service';
+import { RedisService } from 'src/shared/redis/redis.service';
 export interface ProductFilters {
   status?: ProductStatus;
   saleMethod?: SaleMethod;
@@ -48,6 +49,29 @@ export interface ProductStats {
   auction: number;
   liveAuctions: number; // ACTIVE + AUCTION + auctionEndAt > now
 }
+
+// ── Cache constants ───────────────────────────────────────────────────────────
+
+const TTL = {
+  publicProduct: 60 * 10, // 10 min — public detail page
+  merchantList: 60 * 5, // 5 min  — merchant's own product list
+  marketSearch: 60 * 2, // 2 min  — search results (short; filter space is unbounded)
+  stats: 60 * 1, // 1 min  — admin stat block
+} as const;
+
+const CK = {
+  public: (id: string) => `products:public:${id}`,
+  merchant: (merchantId: string) => `products:merchant:${merchantId}`,
+  market: (filter: FilterMarketDto) => {
+    // Stable hash: sort keys so query-param order never creates duplicate entries
+    const sorted = Object.fromEntries(
+      Object.entries(filter).sort(([a], [b]) => a.localeCompare(b)),
+    );
+    return `products:market:${JSON.stringify(sorted)}`;
+  },
+  stats: () => 'products:stats',
+} as const;
+
 @Injectable()
 export class ProductsService {
   private readonly logger = new Logger(ProductsService.name);
@@ -60,6 +84,7 @@ export class ProductsService {
 
     private readonly uploadService: UploadService,
     private readonly farmsService: FarmsService,
+    private readonly redis: RedisService,
   ) {}
 
   /*
@@ -144,7 +169,15 @@ export class ProductsService {
 
     const product = this.repo.create(productData);
 
-    return this.repo.save(product);
+    const saved = await this.repo.save(product);
+
+    // A new product changes the merchant list and global stats
+    await Promise.all([
+      this.redis.del(CK.merchant(merchantId)),
+      this.redis.del(CK.stats()),
+    ]);
+
+    return saved;
   }
 
   /*
@@ -157,6 +190,12 @@ export class ProductsService {
     merchantId: string,
     status?: ProductStatus,
   ): Promise<Product[]> {
+    const cacheKey = CK.merchant(merchantId);
+    if (!status) {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) return JSON.parse(cached) as Product[];
+    }
+
     const qb = this.repo
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.media', 'media')
@@ -171,14 +210,18 @@ export class ProductsService {
       qb.andWhere('p.status = :status', { status });
     }
 
+    const products = await qb.getMany();
+
+    if (!status) {
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify(products),
+        TTL.merchantList,
+      );
+    }
+
     return qb.getMany();
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Find One
-  |--------------------------------------------------------------------------
-  */
 
   /*
 |--------------------------------------------------------------------------
@@ -210,6 +253,9 @@ export class ProductsService {
 */
 
   async findPublicProduct(id: string): Promise<Product> {
+    const cached = await this.redis.get(CK.public(id));
+    if (cached) return JSON.parse(cached) as Product;
+
     const product = await this.repo.findOne({
       where: {
         id,
@@ -222,7 +268,11 @@ export class ProductsService {
     if (!product) {
       throw new NotFoundException('Product not found');
     }
-
+    await this.redis.set(
+      CK.public(id),
+      JSON.stringify(product),
+      TTL.publicProduct,
+    );
     return product;
   }
 
@@ -245,7 +295,10 @@ export class ProductsService {
 
     Object.assign(product, dto);
 
-    return this.repo.save(product);
+    const saved = await this.repo.save(product);
+
+    await this.bustProduct(id, merchantId);
+    return saved;
   }
 
   /*
@@ -262,11 +315,10 @@ export class ProductsService {
       deletedAt: new Date(),
     });
 
-    /**
-     * Better long-term:
-     *
-     * await this.repo.softDelete(id);
-     */
+    await Promise.all([
+      this.bustProduct(id, merchantId),
+      this.redis.del(CK.stats()),
+    ]);
   }
 
   /*
@@ -276,21 +328,9 @@ export class ProductsService {
   */
 
   // ── Add to ProductsService constructor ────────────────────────────────────────
-  //
-  // constructor(
-  //   ...
-  //   private readonly uploadService: UploadService,
-  // ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Uploads multiple images/videos to Cloudinary in parallel,
-   * then persists a ProductMedia row for each one.
-   *
-   * sortOrder reflects the order files were sent — the client
-   * controls display order by reordering the multipart array.
-   */
   async uploadMedia(
     productId: string,
     merchantId: string,
@@ -319,7 +359,10 @@ export class ProductsService {
       }),
     );
 
-    return this.mediaRepo.save(mediaEntities);
+    const saved = await this.mediaRepo.save(mediaEntities);
+
+    await this.bustProduct(productId, merchantId);
+    return saved;
   }
 
   /**
@@ -348,6 +391,7 @@ export class ProductsService {
     }
 
     await this.mediaRepo.delete(mediaId);
+    await this.bustProduct(productId, merchantId);
   }
   /*
   |--------------------------------------------------------------------------
@@ -355,7 +399,14 @@ export class ProductsService {
   |--------------------------------------------------------------------------
   */
 
-  searchMarket(filter: FilterMarketDto) {
+  async searchMarket(filter: FilterMarketDto) {
+    const cacheKey = CK.market(filter);
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
     const {
       q,
       categoryId,
@@ -434,7 +485,9 @@ export class ProductsService {
 
     qb.orderBy('p.createdAt', 'DESC');
 
-    return paginate(qb, page, limit);
+    const result = await paginate(qb, page, limit);
+    await this.redis.set(cacheKey, JSON.stringify(result), TTL.marketSearch);
+    return result;
   }
 
   /*
@@ -456,12 +509,6 @@ export class ProductsService {
       status: ProductStatus.ACTIVE,
     };
 
-    /*
-    |--------------------------------------------------------------------------
-    | Reset Auction State
-    |--------------------------------------------------------------------------
-    */
-
     if (product.saleMethod === SaleMethod.AUCTION) {
       const duration = product.auctionDurationHours ?? 24;
 
@@ -473,6 +520,8 @@ export class ProductsService {
     }
 
     await this.repo.update(id, updatePayload);
+    await this.bustProduct(id, merchantId);
+
     return this.findMerchantProduct(id, merchantId);
   }
 
@@ -565,6 +614,11 @@ export class ProductsService {
       `Product deactivated [id=${id}] by admin [${adminId}] — reason: ${reason}`,
     );
 
+    await Promise.all([
+      this.redis.del(CK.public(id)),
+      this.redis.del(CK.stats()),
+    ]);
+
     return this.findOneAdmin(id);
   }
 
@@ -581,7 +635,10 @@ export class ProductsService {
     await this.repo.update(id, { status: ProductStatus.ACTIVE });
 
     this.logger.log(`Product reactivated [id=${id}] by admin [${adminId}]`);
-
+    await Promise.all([
+      this.redis.del(CK.public(id)),
+      this.redis.del(CK.stats()),
+    ]);
     return this.findOneAdmin(id);
   }
 
@@ -607,6 +664,9 @@ export class ProductsService {
    * Admin dashboard stat block.
    */
   async getStats(): Promise<ProductStats> {
+    const cached = await this.redis.get(CK.stats());
+    if (cached) return JSON.parse(cached) as ProductStats;
+
     const rows = await this.repo
       .createQueryBuilder('p')
       .select('p.status', 'status')
@@ -663,6 +723,24 @@ export class ProductsService {
       }
     }
 
+    await this.redis.set(CK.stats(), JSON.stringify(base), TTL.stats);
     return base;
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | Cache helpers
+  |--------------------------------------------------------------------------
+  */
+
+  /**
+   * Busts the public detail page and the owning merchant's list.
+   * Call this after any mutation that changes what buyers or the merchant see.
+   */
+  private async bustProduct(id: string, merchantId: string): Promise<void> {
+    await Promise.all([
+      this.redis.del(CK.public(id)),
+      this.redis.del(CK.merchant(merchantId)),
+    ]);
   }
 }

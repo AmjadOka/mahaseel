@@ -29,6 +29,22 @@ import { DeliveryMethod } from 'src/common/enums/delivery.enum';
 import { Product } from '../products/entities/product.entity';
 import { BidStatus } from 'src/common/enums/bid.enum';
 import { AuctionBid } from '../auctions/entities/auction-bid.entity';
+import { RedisService } from 'src/shared/redis/redis.service';
+
+// ── Cache constants ────────────────────────────────────────────────────────────
+
+const TTL = {
+  order: 60 * 5, // 5 min — financial/status data; keep short
+  paginatedList: 60 * 2, // 2 min — paginated lists; short TTL, can't bust all page variants
+} as const;
+
+const CK = {
+  one: (id: string) => `orders:one:${id}`,
+  buyer: (buyerId: string, page: number, limit: number) =>
+    `orders:buyer:${buyerId}:${page}:${limit}`,
+  merchant: (merchantId: string, page: number, limit: number) =>
+    `orders:merchant:${merchantId}:${page}:${limit}`,
+} as const;
 
 @Injectable()
 export class OrdersService {
@@ -44,6 +60,8 @@ export class OrdersService {
     private paymentsService: PaymentsService,
     private config: ConfigService,
     private dataSource: DataSource,
+
+    private readonly redis: RedisService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -210,6 +228,8 @@ export class OrdersService {
       await queryRunner.release();
     }
 
+    await this.redis.del(CK.one(savedOrderId!));
+
     // ── Post-commit: notify merchant only for brand-new orders ───────────────
     //
     // If the buyer is just updating their existing pending order, the merchant
@@ -347,6 +367,13 @@ export class OrdersService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async getBuyerOrders(buyerId: string, pagination: PaginationDto) {
+    const page = Number(pagination.page);
+    const limit = Number(pagination.limit);
+    const cacheKey = CK.buyer(buyerId, page, limit);
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
     const qb = this.repo
       .createQueryBuilder('o')
       .leftJoinAndSelect('o.product', 'product')
@@ -354,10 +381,19 @@ export class OrdersService {
       .where('o.buyerId = :buyerId', { buyerId })
       .orderBy('o.createdAt', 'DESC');
 
-    return paginate(qb, Number(pagination.page), Number(pagination.limit));
+    const result = await paginate(qb, page, limit);
+    await this.redis.set(cacheKey, JSON.stringify(result), TTL.paginatedList);
+    return result;
   }
 
   async getMerchantOrders(merchantId: string, pagination: PaginationDto) {
+    const page = Number(pagination.page);
+    const limit = Number(pagination.limit);
+    const cacheKey = CK.merchant(merchantId, page, limit);
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
     const qb = this.repo
       .createQueryBuilder('o')
       .leftJoinAndSelect('o.product', 'product')
@@ -365,7 +401,9 @@ export class OrdersService {
       .where('o.merchantId = :merchantId', { merchantId })
       .orderBy('o.createdAt', 'DESC');
 
-    return paginate(qb, Number(pagination.page), Number(pagination.limit));
+    const result = await paginate(qb, page, limit);
+    await this.redis.set(cacheKey, JSON.stringify(result), TTL.paginatedList);
+    return result;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -373,12 +411,18 @@ export class OrdersService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async findOne(id: string): Promise<Order> {
+    const cached = await this.redis.get(CK.one(id));
+    if (cached) return JSON.parse(cached) as Order;
+
     const order = await this.repo.findOne({
       where: { id },
       relations: ['product', 'product.media', 'buyer', 'merchant', 'payment'],
     });
 
     if (!order) throw new NotFoundException('Order not found');
+
+    await this.redis.set(CK.one(id), JSON.stringify(order), TTL.order);
+
     return order;
   }
 
@@ -527,6 +571,10 @@ export class OrdersService {
       await queryRunner.release();
     }
 
+    await Promise.all([
+      this.redis.del(CK.one(orderId)),
+      ...cancelledOrders.map((o) => this.redis.del(CK.one(o.id))),
+    ]);
     // ── Post-commit: Stripe session ──────────────────────────────────────────
     //
     // If Stripe fails, manually revert everything back to pre-accept state
@@ -636,6 +684,7 @@ export class OrdersService {
       status: OrderStatus.REJECTED,
       rejectionReason: reason,
     });
+    await this.redis.del(CK.one(orderId));
 
     await this.notificationsService.notify(order.buyerId, {
       type: NotificationType.ORDER_REJECTED,
@@ -734,6 +783,8 @@ export class OrdersService {
 
     await this.repo.update(orderId, { deliveryStatus: nextStatus });
 
+    await this.redis.del(CK.one(orderId));
+
     await this.notificationsService.notify(order.buyerId, {
       type: NotificationType.ORDER_STATUS_CHANGED,
       title: 'Delivery Status Updated',
@@ -762,7 +813,10 @@ export class OrdersService {
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
+    let merchantId: string;
+
     try {
+      // Direct DB read inside transaction — intentionally bypasses cache
       const order = await queryRunner.manager.findOne(Order, {
         where: { id: orderId },
       });
@@ -770,12 +824,10 @@ export class OrdersService {
       if (!order) throw new NotFoundException('Order not found');
       if (order.buyerId !== buyerId)
         throw new ForbiddenException('Access denied');
-      if (order.deliveryStatus !== DeliveryStatus.DELIVERED) {
+      if (order.deliveryStatus !== DeliveryStatus.DELIVERED)
         throw new BadRequestException('Order has not been delivered yet');
-      }
-      if (order.status === OrderStatus.COMPLETED) {
+      if (order.status === OrderStatus.COMPLETED)
         throw new BadRequestException('Order is already completed');
-      }
 
       await queryRunner.manager.update(Order, orderId, {
         status: OrderStatus.COMPLETED,
@@ -788,25 +840,28 @@ export class OrdersService {
         queryRunner.manager,
       );
 
+      merchantId = order.merchantId;
       await queryRunner.commitTransaction();
-
-      await this.notificationsService.notify(order.merchantId, {
-        type: NotificationType.ORDER_STATUS_CHANGED,
-        title: '',
-        body: '',
-        titleAr: 'تم تأكيد استلام الطلب',
-        bodyAr: 'أكد المشتري استلام الطلب وتم تحويل الأرباح إلى محفظتك.',
-        referenceType: 'order',
-        referenceId: order.id,
-      });
-
-      return this.findOne(orderId);
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
     } finally {
       await queryRunner.release();
     }
+
+    await this.redis.del(CK.one(orderId));
+
+    await this.notificationsService.notify(merchantId!, {
+      type: NotificationType.ORDER_STATUS_CHANGED,
+      title: '',
+      body: '',
+      titleAr: 'تم تأكيد استلام الطلب',
+      bodyAr: 'أكد المشتري استلام الطلب وتم تحويل الأرباح إلى محفظتك.',
+      referenceType: 'order',
+      referenceId: orderId,
+    });
+
+    return this.findOne(orderId);
   }
 
   /**
@@ -826,6 +881,8 @@ export class OrdersService {
     }
 
     await this.repo.update(orderId, { status: OrderStatus.CANCELLED });
+
+    await this.redis.del(CK.one(orderId));
 
     await this.notificationsService.notify(order.merchantId, {
       type: NotificationType.ORDER_STATUS_CHANGED,

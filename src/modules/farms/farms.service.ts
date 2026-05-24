@@ -14,11 +14,8 @@ import { FarmStatus } from 'src/common/enums/farm.enum';
 import { NotificationsService } from '../notifications/services/notifications.service';
 import { NotificationType } from 'src/common/enums/notification.enum';
 import { UploadService } from '../upload/upload.service';
-<<<<<<< HEAD
 import { MediaType } from 'src/common/enums/platform.enum';
-=======
->>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
-// import { StorageService } from '../../shared/storage/storage.service';
+import { RedisService } from 'src/shared/redis/redis.service';
 
 // ─── DTOs / Types ────────────────────────────────────────────────────────────
 
@@ -61,6 +58,40 @@ export interface RejectionPayload extends ApprovalPayload {
   reason: string;
 }
 
+// ── Cache constants ────────────────────────────────────────────────────────────
+
+const TTL = {
+  farmDetail: 60 * 10, // 10 min — single farm detail
+  ownerList: 60 * 3, // 3 min  — paginated+filtered list (short; can't bust all page variants)
+  stats: 60 * 2, // 2 min  — dashboard stat block
+  farmProducts: 60 * 5, // 5 min  — farm's product list
+} as const;
+
+const CK = {
+  one: (id: string) => `farms:one:${id}`,
+  products: (farmId: string) => `farms:products:${farmId}`,
+  stats: (ownerId?: string) =>
+    ownerId ? `farms:stats:${ownerId}` : 'farms:stats',
+
+  /**
+   * Paginated owner list — includes page/limit/filters in the key so every
+   * unique request gets its own slot. Short TTL handles invalidation.
+   */
+  ownerList: (
+    ownerId: string,
+    opts: PaginationOptions,
+    filters: Pick<FarmFilters, 'status' | 'search'>,
+  ) => {
+    const params = { ...opts, ...filters };
+    const stable = Object.fromEntries(
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b)),
+    );
+    return `farms:owner:${ownerId}:${JSON.stringify(stable)}`;
+  },
+} as const;
+
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -73,6 +104,7 @@ export class FarmsService {
     @InjectRepository(FarmMedia)
     private readonly mediaRepo: Repository<FarmMedia>,
     private readonly uploadService: UploadService,
+    private readonly redis: RedisService,
   ) {}
 
   // ── Create ──────────────────────────────────────────────────────────────────
@@ -99,6 +131,8 @@ export class FarmsService {
       referenceId: saved.id,
     });
 
+    await this.bustStats(ownerId);
+
     return saved;
   }
 
@@ -113,6 +147,11 @@ export class FarmsService {
     filters: Pick<FarmFilters, 'status' | 'search'> = {},
   ): Promise<PaginatedResult<Farm>> {
     const where: FindOptionsWhere<Farm> = { ownerId, isDeleted: false };
+
+    const cacheKey = CK.ownerList(ownerId, { page, limit }, filters);
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached) as PaginatedResult<Farm>;
 
     if (filters.status) where.status = filters.status;
 
@@ -129,15 +168,16 @@ export class FarmsService {
       .take(limit);
 
     const [data, total] = await qb.getManyAndCount();
-
-    return {
+    const result: PaginatedResult<Farm> = {
       data,
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
-  }
+    await this.redis.set(cacheKey, JSON.stringify(result), TTL.ownerList);
 
+    return result;
+  }
   /**
-   * Admin: paginated list of all farms with optional filters.
+   * Admin: paginated list of all farms — not cached (live data).
    */
   async findAll(
     { page = 1, limit = 20 }: PaginationOptions = {},
@@ -179,6 +219,15 @@ export class FarmsService {
     ownerId?: string,
     includeDeleted = false,
   ): Promise<Farm> {
+    if (!includeDeleted) {
+      const cached = await this.redis.get(CK.one(id));
+      if (cached) {
+        const farm = JSON.parse(cached) as Farm;
+        if (ownerId && farm.ownerId !== ownerId)
+          throw new ForbiddenException('Access denied');
+        return farm;
+      }
+    }
     const qb = this.farmRepo
       .createQueryBuilder('farm')
       .leftJoinAndSelect('farm.owner', 'owner')
@@ -193,6 +242,9 @@ export class FarmsService {
     if (ownerId && farm.ownerId !== ownerId)
       throw new ForbiddenException('Access denied');
 
+    if (!includeDeleted) {
+      await this.redis.set(CK.one(id), JSON.stringify(farm), TTL.farmDetail);
+    }
     return farm;
   }
 
@@ -233,6 +285,7 @@ export class FarmsService {
         referenceId: saved.id,
       });
     }
+    await this.redis.del(CK.one(id));
 
     return saved;
   }
@@ -270,6 +323,8 @@ export class FarmsService {
       referenceId: farm.id,
     });
 
+    await this.bustFarmAndStats(farmId, farm.ownerId);
+
     return this.findOne(farmId);
   }
 
@@ -302,6 +357,7 @@ export class FarmsService {
       referenceType: 'farm',
       referenceId: farm.id,
     });
+    await this.bustFarmAndStats(farmId, farm.ownerId);
 
     return this.findOne(farmId);
   }
@@ -334,6 +390,8 @@ export class FarmsService {
       referenceId: farm.id,
     });
 
+    await this.bustFarmAndStats(farmId, farm.ownerId);
+
     return this.findOne(farmId);
   }
 
@@ -362,6 +420,7 @@ export class FarmsService {
       referenceType: 'farm',
       referenceId: farm.id,
     });
+    await this.bustFarmAndStats(farmId, farm.ownerId);
 
     return this.findOne(farmId);
   }
@@ -389,6 +448,10 @@ export class FarmsService {
       referenceType: 'farm',
       referenceId: farm.id,
     });
+    await Promise.all([
+      this.bustFarmAndStats(id, ownerId),
+      this.redis.del(CK.products(id)),
+    ]);
   }
 
   /**
@@ -460,7 +523,7 @@ export class FarmsService {
     await Promise.all(
       allMedia
         .filter((m) => m.publicId)
-        .map((m) => this.uploadService.delete(m.publicId!)),
+        .map((m) => this.uploadService.delete(m.publicId)),
     );
 
     await this.mediaRepo.delete({ farmId });
@@ -473,6 +536,10 @@ export class FarmsService {
     const farm = await this.findOne(farmId, undefined, true);
     await this.farmRepo.remove(farm);
     this.logger.warn(`Farm hard-deleted [id=${farmId}] by admin [${adminId}]`);
+    await Promise.all([
+      this.bustFarmAndStats(farmId, farm.ownerId),
+      this.redis.del(CK.products(farmId)),
+    ]);
   }
 
   // ── Products ────────────────────────────────────────────────────────────────
@@ -489,13 +556,24 @@ export class FarmsService {
         'Products are only available on approved farms.',
       );
     }
+    const cacheKey = CK.products(farmId);
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
 
-    return farm.products ?? [];
+    // Products are loaded via the farm relation in findOne —
+    // return them and cache this slice independently.
+    const products = farm.products ?? [];
+    await this.redis.set(cacheKey, JSON.stringify(products), TTL.farmProducts);
+    return products;
   }
 
   // ── Stats (Admin Dashboard) ─────────────────────────────────────────────────
 
   async getStats(ownerId?: string): Promise<FarmStats> {
+    const cacheKey = CK.stats(ownerId);
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached) as FarmStats;
+
     const qb = this.farmRepo
       .createQueryBuilder('farm')
       .where('farm.isDeleted = false');
@@ -538,6 +616,7 @@ export class FarmsService {
           break;
       }
     }
+    await this.redis.set(cacheKey, JSON.stringify(base), TTL.stats);
 
     return base;
   }
@@ -584,5 +663,32 @@ export class FarmsService {
     }
 
     return farm;
+  }
+  // ── Cache helpers ─────────────────────────────────────────────────────────────
+
+  /**
+   * Busts the farm detail key and both stat scopes (global + per-owner).
+   * Used by every admin status mutation.
+   */
+  private async bustFarmAndStats(
+    farmId: string,
+    ownerId: string,
+  ): Promise<void> {
+    await Promise.all([
+      this.redis.del(CK.one(farmId)),
+      this.redis.del(CK.stats()),
+      this.redis.del(CK.stats(ownerId)),
+    ]);
+  }
+
+  /**
+   * Busts only the stat keys — used after create()
+   * (the new farm has no prior detail cache to clear).
+   */
+  private async bustStats(ownerId: string): Promise<void> {
+    await Promise.all([
+      this.redis.del(CK.stats()),
+      this.redis.del(CK.stats(ownerId)),
+    ]);
   }
 }

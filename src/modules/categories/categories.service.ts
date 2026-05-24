@@ -12,6 +12,14 @@ import {
   UpdateCategoryDto,
 } from './dto/create-category.dto';
 import { UploadService } from '../upload/upload.service';
+import { RedisService } from 'src/shared/redis/redis.service';
+
+const CACHE_KEYS = {
+  all: 'categories:all',
+  one: (id: string) => `categories:${id}`,
+} as const;
+
+const CATEGORIES_TTL = 60 * 60; // 5 minutes
 
 @Injectable()
 export class CategoriesService {
@@ -19,25 +27,42 @@ export class CategoriesService {
     @InjectRepository(Category)
     private readonly repo: Repository<Category>,
     private readonly uploadService: UploadService,
+    private readonly redis: RedisService,
   ) {}
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
   /** Returns all active root categories with their immediate children. */
   async findAll(): Promise<Category[]> {
-    return this.repo.find({
+    const cached = await this.redis.get(CACHE_KEYS.all);
+    if (cached) return JSON.parse(cached) as Category[];
+    const categories = this.repo.find({
       where: { isActive: true, parentId: IsNull() },
       relations: ['children'],
       order: { sortOrder: 'ASC', nameAr: 'ASC' },
     });
+    await this.redis.set(
+      CACHE_KEYS.all,
+      JSON.stringify(categories),
+      CATEGORIES_TTL,
+    );
+    return categories;
   }
 
   async findOne(id: string): Promise<Category> {
+    const cached = await this.redis.get(CACHE_KEYS.one(id));
+    if (cached) return JSON.parse(cached) as Category;
+
     const cat = await this.repo.findOne({
       where: { id, isActive: true },
       relations: ['children', 'parent'],
     });
     if (!cat) throw new NotFoundException('Category not found');
+    await this.redis.set(
+      CACHE_KEYS.one(id),
+      JSON.stringify(cat),
+      CATEGORIES_TTL,
+    );
     return cat;
   }
 
@@ -49,7 +74,9 @@ export class CategoriesService {
     await this.assertSlugUnique(slug);
 
     const cat = this.repo.create({ ...dto, slug });
-    return this.repo.save(cat);
+    const saved = await this.repo.save(cat);
+    await this.invalidateAll();
+    return saved;
   }
 
   async update(id: string, dto: UpdateCategoryDto): Promise<Category> {
@@ -68,6 +95,7 @@ export class CategoriesService {
     const cat = await this.findOne(id);
     cat.isActive = false;
     await this.repo.save(cat);
+    await this.invalidate(id);
   }
 
   // ── Icon upload ────────────────────────────────────────────────────────────
@@ -85,7 +113,10 @@ export class CategoriesService {
 
     cat.iconUrl = uploaded.url;
     cat.iconPublicId = uploaded.publicId;
-    return this.repo.save(cat);
+    const saved = await this.repo.save(cat);
+
+    await this.invalidate(id);
+    return saved;
   }
 
   /** Removes the icon from Cloudinary and clears the DB fields. */
@@ -100,10 +131,28 @@ export class CategoriesService {
 
     cat.iconUrl = null;
     cat.iconPublicId = null;
-    return this.repo.save(cat);
+    const saved = await this.repo.save(cat);
+    await this.invalidate(id);
+    return saved;
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  // ── Cache helpers ──────────────────────────────────────────────────────────
+
+  /** Deletes the single-item key AND the list key (list includes this item). */
+  private async invalidate(id: string): Promise<void> {
+    await Promise.all([
+      this.redis.del(CACHE_KEYS.one(id)),
+      this.redis.del(CACHE_KEYS.all),
+    ]);
+  }
+
+  /** Deletes only the list key (used after create where no id key exists yet). */
+  private async invalidateAll(): Promise<void> {
+    await this.redis.del(CACHE_KEYS.all);
+  }
+  // ── Slug helpers ───────────────────────────────────────────────────────────
 
   /**
    * Generates a URL-safe slug.

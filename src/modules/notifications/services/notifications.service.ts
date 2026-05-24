@@ -12,17 +12,33 @@ import {
 } from 'src/common/enums/notification.enum';
 import { NotificationCreatedEvent } from '../events/notification-created.event';
 import { Platform } from 'src/common/enums/platform.enum';
+import { RedisService } from 'src/shared/redis/redis.service';
+
+// ── Cache constants ────────────────────────────────────────────────────────────
+
+const TTL = {
+  unread: 60 * 2, // 2 min — unread list and count; busted on every new notification
+  all: 60 * 1, // 1 min — paginated full list; short TTL only (can't bust all page variants)
+} as const;
+
+const CK = {
+  count: (userId: string) => `notifications:count:${userId}`,
+  unread: (userId: string) => `notifications:unread:${userId}`,
+  all: (userId: string, page: number, limit: number) =>
+    `notifications:all:${userId}:${page}:${limit}`,
+} as const;
 
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
-
   constructor(
     @InjectRepository(Notification)
     private readonly notificationRepo: Repository<Notification>,
     @InjectRepository(FcmToken)
     private readonly fcmTokenRepo: Repository<FcmToken>,
     private readonly emitter: EventEmitter2,
+    // private readonly redis = this.notificationRepo.manager.connection.redis;
+    private readonly redis: RedisService,
   ) {}
 
   // ─── Core notify ─────────────────────────────────────────────────────────────
@@ -61,7 +77,6 @@ export class NotificationsService {
       title: payload.title,
       body: payload.body,
 
-      // Arabic content is now forwarded — no longer silently dropped
       titleAr: payload.titleAr,
       bodyAr: payload.bodyAr,
 
@@ -82,6 +97,7 @@ export class NotificationsService {
     });
 
     await this.emitter.emitAsync('notification.created', event);
+    await this.bustUnread(userId);
 
     this.logger.debug(
       `Notification dispatched [${payload.type}] to user ${userId}`,
@@ -155,24 +171,49 @@ export class NotificationsService {
     page = 1,
     limit = 20,
   ): Promise<{ data: Notification[]; total: number }> {
+    const cacheKey = CK.all(userId, page, limit);
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
     const [data, total] = await this.notificationRepo.findAndCount({
       where: { userId } as FindOptionsWhere<Notification>,
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
     });
-    return { data, total };
+    const result = { data, total };
+    await this.redis.set(cacheKey, JSON.stringify(result), TTL.all);
+    return result;
   }
 
   async getUnread(userId: string): Promise<Notification[]> {
-    return this.notificationRepo.find({
+    const cached = await this.redis.get(CK.unread(userId));
+    if (cached) return JSON.parse(cached) as Notification[];
+
+    const notifications = await this.notificationRepo.find({
       where: { userId, isRead: false },
       order: { createdAt: 'DESC' },
     });
+
+    await this.redis.set(
+      CK.unread(userId),
+      JSON.stringify(notifications),
+      TTL.unread,
+    );
+    return notifications;
   }
 
   async countUnread(userId: string): Promise<number> {
-    return this.notificationRepo.count({ where: { userId, isRead: false } });
+    const cached = await this.redis.get(CK.count(userId));
+    if (cached) return parseInt(cached, 10);
+
+    const count = await this.notificationRepo.count({
+      where: { userId, isRead: false },
+    });
+
+    await this.redis.set(CK.count(userId), String(count), TTL.unread);
+    return count;
   }
 
   async markAsRead(id: string, userId: string): Promise<Notification> {
@@ -184,7 +225,10 @@ export class NotificationsService {
 
     notification.isRead = true;
     notification.readAt = new Date();
-    return this.notificationRepo.save(notification);
+    const saved = await this.notificationRepo.save(notification);
+    await this.bustUnread(userId);
+
+    return saved;
   }
 
   async markAllAsRead(userId: string): Promise<void> {
@@ -192,6 +236,7 @@ export class NotificationsService {
       { userId, isRead: false },
       { isRead: true, readAt: new Date() },
     );
+    await this.bustUnread(userId);
   }
 
   async cleanupOldNotifications(daysToKeep = 30): Promise<void> {
@@ -232,5 +277,18 @@ export class NotificationsService {
 
   async removeFcmToken(userId: string, token: string): Promise<void> {
     await this.fcmTokenRepo.update({ userId, token }, { isActive: false });
+  }
+
+  // ─── Cache helpers ────────────────────────────────────────────────────────────
+
+  /**
+   * Busts the unread list and unread count together.
+   * Called after: notify(), markAsRead(), markAllAsRead().
+   */
+  private async bustUnread(userId: string): Promise<void> {
+    await Promise.all([
+      this.redis.del(CK.unread(userId)),
+      this.redis.del(CK.count(userId)),
+    ]);
   }
 }

@@ -10,6 +10,7 @@ import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { Role } from 'src/common/enums/role.enum';
 import { UploadService } from '../upload/upload.service';
+import { RedisService } from 'src/shared/redis/redis.service';
 // import { StorageService } from '../../shared/storage/storage.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -37,6 +38,20 @@ export interface UserStats {
   ratingCount: number;
 }
 
+// ── Cache constants ────────────────────────────────────────────────────────────
+
+const TTL = {
+  user: 60 * 15, // 15 min — full user row (internal + self-access)
+  public: 60 * 15, // 15 min — public profile (read-heavy, rarely changes)
+  stats: 60 * 5, // 5 min  — order stats mutated by Orders service; short TTL only
+} as const;
+
+const CK = {
+  user: (id: string) => `users:id:${id}`,
+  public: (id: string) => `users:public:${id}`,
+  stats: (id: string) => `users:stats:${id}`,
+} as const;
+
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -46,6 +61,7 @@ export class UsersService {
   constructor(
     @InjectRepository(User) private readonly repo: Repository<User>,
     private readonly uploadService: UploadService,
+    private readonly redis: RedisService,
   ) {}
 
   // ── Queries ────────────────────────────────────────────────────────────────
@@ -55,8 +71,13 @@ export class UsersService {
    * Never return this to unauthenticated callers.
    */
   async findById(id: string): Promise<User> {
+    const cached = await this.redis.get(CK.user(id));
+    if (cached) return JSON.parse(cached) as User;
+
     const user = await this.repo.findOne({ where: { id, isDeleted: false } });
     if (!user) throw new NotFoundException('User not found');
+
+    await this.redis.set(CK.user(id), JSON.stringify(user), TTL.user);
     return user;
   }
 
@@ -64,6 +85,9 @@ export class UsersService {
    * Public-facing profile — only exposes safe fields, only for active users.
    */
   async getPublicProfile(id: string): Promise<PublicProfile> {
+    const cached = await this.redis.get(CK.public(id));
+    if (cached) return JSON.parse(cached) as PublicProfile;
+
     const user = await this.repo.findOne({
       where: { id, isActive: true, isDeleted: false },
       select: [
@@ -77,6 +101,8 @@ export class UsersService {
       ],
     });
     if (!user) throw new NotFoundException('User not found');
+    await this.redis.set(CK.public(id), JSON.stringify(user), TTL.public);
+
     return user;
   }
 
@@ -85,6 +111,9 @@ export class UsersService {
    * Uses a raw query to avoid loading all order rows into memory.
    */
   async getStats(userId: string): Promise<UserStats> {
+    const cached = await this.redis.get(CK.stats(userId));
+    if (cached) return JSON.parse(cached) as UserStats;
+
     const user = await this.findById(userId);
 
     const row = await this.repo
@@ -106,13 +135,16 @@ export class UsersService {
         cancelledOrders: string;
       }>();
 
-    return {
+    const stats: UserStats = {
       totalOrders: parseInt(row?.totalOrders ?? '0', 10),
       completedOrders: parseInt(row?.completedOrders ?? '0', 10),
       cancelledOrders: parseInt(row?.cancelledOrders ?? '0', 10),
       ratingAvg: Number(user.ratingAvg ?? 0),
       ratingCount: user.ratingCount ?? 0,
     };
+
+    await this.redis.set(CK.stats(userId), JSON.stringify(stats), TTL.stats);
+    return stats;
   }
 
   // ── Mutations ──────────────────────────────────────────────────────────────
@@ -122,7 +154,7 @@ export class UsersService {
    * Trims fullName to prevent whitespace-only values.
    */
   async updateProfile(id: string, dto: UpdateProfileDto): Promise<User> {
-    await this.findById(id); // ensure user exists before updating
+    await this.findById(id);
 
     const sanitized: UpdateProfileDto = {};
 
@@ -137,6 +169,8 @@ export class UsersService {
     }
 
     await this.repo.update(id, sanitized);
+    await this.bustUser(id);
+
     return this.findById(id);
   }
 
@@ -151,6 +185,8 @@ export class UsersService {
       profileImage: uploaded.url,
       avatarPublicId: uploaded.publicId, // store for future replace/delete
     });
+
+    await this.bustUser(id);
 
     return this.findById(id);
   }
@@ -170,14 +206,11 @@ export class UsersService {
     }
 
     await this.repo.update(id, {
-<<<<<<< HEAD
       profileImage: undefined,
       avatarPublicId: undefined,
-=======
-      profileImage: null,
-      avatarPublicId: null,
->>>>>>> 668248664679d1294fd22e94ffd03177d03f73c1
     });
+
+    await this.bustUser(id);
 
     return this.findById(id);
   }
@@ -198,4 +231,16 @@ export class UsersService {
     this.logger.log(`User soft-deleted [id=${id}]`);
   }
        */
+  // ── Cache helpers ──────────────────────────────────────────────────────────
+
+  /**
+   * Busts both the internal user row and the public profile in one shot.
+   * Call after any mutation that changes fields visible in either response.
+   */
+  private async bustUser(id: string): Promise<void> {
+    await Promise.all([
+      this.redis.del(CK.user(id)),
+      this.redis.del(CK.public(id)),
+    ]);
+  }
 }
