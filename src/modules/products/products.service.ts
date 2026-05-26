@@ -337,8 +337,6 @@ export class ProductsService {
   |--------------------------------------------------------------------------
   */
 
-  // ── Add to ProductsService constructor ────────────────────────────────────────
-
   // ─────────────────────────────────────────────────────────────────────────────
 
   async uploadMedia(
@@ -564,43 +562,66 @@ export class ProductsService {
   /**
    * Admin paginated list with full filter set.
    */
-  findAllAdmin(pagination: PaginationDto, filters: ProductFilters = {}) {
+  async findAllAdmin(pagination: PaginationDto, filters: ProductFilters = {}) {
     const qb = this.repo
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.media', 'media')
       .leftJoinAndSelect('p.category', 'category')
-      .leftJoinAndSelect('p.merchant', 'merchant')
       .leftJoinAndSelect('p.farm', 'farm')
-      .where('p.isDeleted = false')
+      .where('p.isDeleted = :deleted', {
+        deleted: false,
+      })
       .orderBy('p.createdAt', 'DESC');
 
-    if (filters.status)
-      qb.andWhere('p.status = :status', { status: filters.status });
+    if (filters.status) {
+      qb.andWhere('p.status = :status', {
+        status: filters.status,
+      });
+    }
 
-    if (filters.saleMethod)
+    if (filters.saleMethod) {
       qb.andWhere('p.saleMethod = :saleMethod', {
         saleMethod: filters.saleMethod,
       });
+    }
 
-    if (filters.merchantId)
+    if (filters.merchantId) {
       qb.andWhere('p.merchantId = :merchantId', {
         merchantId: filters.merchantId,
       });
+    }
 
-    if (filters.farmId)
-      qb.andWhere('p.farmId = :farmId', { farmId: filters.farmId });
+    if (filters.farmId) {
+      qb.andWhere('p.farmId = :farmId', {
+        farmId: filters.farmId,
+      });
+    }
 
-    if (filters.categoryId)
+    if (filters.categoryId) {
       qb.andWhere('p.categoryId = :categoryId', {
         categoryId: filters.categoryId,
       });
+    }
 
-    if (filters.search)
-      qb.andWhere('(p.name ILIKE :q OR p.description ILIKE :q)', {
-        q: `%${filters.search}%`,
-      });
+    if (filters.search?.trim()) {
+      qb.andWhere(
+        `
+        (
+          p.name ILIKE :search
+          OR COALESCE(p.description, '') ILIKE :search
+        )
+        `,
+        {
+          search: `%${filters.search.trim()}%`,
+        },
+      );
+    }
 
-    return paginate(qb, Number(pagination.page), Number(pagination.limit));
+    return paginate(
+      qb,
+      Number(pagination.page ?? 1),
+      Number(pagination.limit ?? 10),
+    );
   }
 
   /**
@@ -655,21 +676,32 @@ export class ProductsService {
   /**
    * Admin: live auction products only — sorted by soonest expiry.
    */
-  getLiveAuctions(pagination: PaginationDto) {
+  async getLiveAuctions(pagination: PaginationDto) {
     const qb = this.repo
       .createQueryBuilder('p')
-      .leftJoinAndSelect('p.merchant', 'merchant')
       .leftJoinAndSelect('p.farm', 'farm')
       .leftJoinAndSelect('p.bids', 'bids')
-      .where('p.saleMethod = :method', { method: SaleMethod.AUCTION })
-      .andWhere('p.status = :status', { status: ProductStatus.ACTIVE })
-      .andWhere('p.isDeleted = false')
-      .andWhere('p.auctionEndAt > :now', { now: new Date() })
+      .leftJoinAndSelect('p.media', 'media')
+      .where('p.saleMethod = :method', {
+        method: SaleMethod.AUCTION,
+      })
+      .andWhere('p.status = :status', {
+        status: ProductStatus.ACTIVE,
+      })
+      .andWhere('p.isDeleted = :deleted', {
+        deleted: false,
+      })
+      .andWhere('p.auctionEndAt > :now', {
+        now: new Date(),
+      })
       .orderBy('p.auctionEndAt', 'ASC');
 
-    return paginate(qb, Number(pagination.page), Number(pagination.limit));
+    return paginate(
+      qb,
+      Number(pagination.page ?? 1),
+      Number(pagination.limit ?? 10),
+    );
   }
-
   /**
    * Admin dashboard stat block.
    */

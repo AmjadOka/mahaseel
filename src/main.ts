@@ -12,6 +12,8 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { seedCategories } from './database/seeds/categories.seed';
+import { DataSource } from 'typeorm';
 
 async function bootstrap() {
   const fastifyAdapter = new FastifyAdapter({
@@ -131,9 +133,10 @@ async function bootstrap() {
 
   await app.listen(port, '0.0.0.0');
 
+  //const dataSource = app.get(DataSource);
+  //await seedCategories(dataSource);
+
   console.log(`🌾 API running on http://localhost:${port}`);
-  console.log(`📘 Swagger UI: http://localhost:${port}/${prefix}/docs`);
-  console.log(`📄 Swagger JSON: http://localhost:${port}/${prefix}/docs-json`);
 }
 
 bootstrap();

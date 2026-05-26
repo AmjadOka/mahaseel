@@ -1,119 +1,171 @@
+// categories.controller.ts
 import {
   Controller,
   Get,
   Post,
   Put,
+  Patch,
   Delete,
   Body,
   Param,
-  HttpCode,
-  HttpStatus,
+  Query,
   UseGuards,
   UseInterceptors,
   UploadedFile,
   ParseUUIDPipe,
+  ParseBoolPipe,
+  BadRequestException,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
+import { memoryStorage } from 'multer'; // ← explicit memoryStorage
 import {
   ApiTags,
   ApiBearerAuth,
   ApiOperation,
+  ApiQuery,
+  ApiResponse,
   ApiConsumes,
   ApiBody,
 } from '@nestjs/swagger';
 
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../../common/guards/roles.guard';
-import { Public, Roles } from '../../common/decorators';
-import { Role } from 'src/common/enums/role.enum';
+import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
+import { AdminGuard } from 'src/common/guards/admin.guard';
 import { FileValidationPipe } from '../upload/validation.pipe';
-
 import { CategoriesService } from './categories.service';
-import {
-  CreateCategoryDto,
-  UpdateCategoryDto,
-} from './dto/create-category.dto';
+import { CreateCategoryDto } from './dto/create-category.dto';
+import { UpdateCategoryDto } from './dto/update-category.dto';
+import { PaginationDto } from 'src/common/dto/pagination.dto';
+import { Roles } from 'src/common/decorators';
+import { Role } from 'src/common/enums/role.enum';
 
 @ApiTags('Categories')
 @Controller('categories')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard)
+@ApiBearerAuth()
 export class CategoriesController {
-  constructor(private readonly categoriesService: CategoriesService) {}
+  constructor(private readonly service: CategoriesService) {}
 
-  // ── Public ─────────────────────────────────────────────────────────────────
+  // ── List ───────────────────────────────────────────────────────────────────
 
   @Get()
-  @Public()
-  @ApiOperation({ summary: 'List all root categories with children' })
-  findAll() {
-    return this.categoriesService.findAll();
+  @ApiOperation({ summary: '[Public] List all categories (includes inactive)' })
+  @ApiQuery({
+    name: 'parentId',
+    required: false,
+    description: 'Filter by parent UUID. Pass "null" for top-level only.',
+  })
+  @ApiQuery({ name: 'isActive', required: false, type: Boolean })
+  findAll(
+    @Query() pagination: PaginationDto,
+    @Query('parentId') parentId?: string,
+    @Query('isActive', new ParseBoolPipe({ optional: true }))
+    isActive?: boolean,
+  ) {
+    const resolvedParentId = parentId === 'null' ? null : parentId;
+    return this.service.findAll(pagination, {
+      parentId: resolvedParentId,
+      isActive,
+    });
   }
 
   @Get(':id')
-  @Public()
-  @ApiOperation({ summary: 'Get a single category with parent and children' })
+  @ApiOperation({
+    summary: '[Public] Get a single category with parent + children',
+  })
+  @ApiResponse({ status: 404, description: 'Not found' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.categoriesService.findOne(id);
+    return this.service.findOne(id);
   }
+}
 
-  // ── Admin — CRUD ───────────────────────────────────────────────────────────
+@ApiTags('Admin — Categories')
+@Controller('admin/categories')
+@Roles(Role.ADMIN)
+@UseGuards(AdminGuard)
+@ApiBearerAuth()
+export class AdminCategoriesController {
+  constructor(private readonly service: CategoriesService) {}
 
+  @UseGuards(AdminGuard)
   @Post()
-  @Roles(Role.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: '[Admin] Create a category' })
+  @ApiOperation({
+    summary: '[Admin] Create a category',
+    description:
+      'Creates the category record. To attach an icon, call ' +
+      'PUT /admin/categories/:id/icon after creation.',
+  })
+  @ApiResponse({ status: 409, description: 'Slug already in use' })
   create(@Body() dto: CreateCategoryDto) {
-    return this.categoriesService.create(dto);
+    return this.service.create(dto);
   }
 
-  @Put(':id')
-  @Roles(Role.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: '[Admin] Update a category' })
+  // ── Update (meta) ──────────────────────────────────────────────────────────
+
+  @Patch(':id')
+  @ApiOperation({
+    summary:
+      '[Admin] Update category name, slug, sortOrder, isActive, or parentId',
+  })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @ApiResponse({ status: 409, description: 'Slug already in use' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCategoryDto,
   ) {
-    return this.categoriesService.update(id, dto);
+    return this.service.update(id, dto);
   }
 
-  @Delete(':id')
-  @Roles(Role.ADMIN)
-  @ApiBearerAuth()
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: '[Admin] Soft-delete a category' })
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.categoriesService.remove(id);
-  }
-
-  // ── Admin — Icon ───────────────────────────────────────────────────────────
+  // ── Replace icon ───────────────────────────────────────────────────────────
 
   @Put(':id/icon')
-  @Roles(Role.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: '[Admin] Upload or replace the category icon' })
+  @UseInterceptors(FileInterceptor('icon', { storage: memoryStorage() })) // ← memoryStorage
   @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: '[Admin] Upload or replace the category icon' })
   @ApiBody({
     schema: {
       type: 'object',
-      properties: { file: { type: 'string', format: 'binary' } },
+      required: ['icon'],
+      properties: { icon: { type: 'string', format: 'binary' } },
     },
   })
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
-  uploadIcon(
+  updateIcon(
     @Param('id', ParseUUIDPipe) id: string,
-    @UploadedFile(FileValidationPipe) file: Express.Multer.File,
+    @UploadedFile() icon: Express.Multer.File,
   ) {
-    return this.categoriesService.uploadIcon(id, file);
+    if (!icon) throw new BadRequestException('Icon file is required.');
+    const pipe = new FileValidationPipe(); // ← same pipe as products
+    pipe.transform(icon);
+    return this.service.updateIcon(id, icon);
   }
 
+  // ── Remove icon ────────────────────────────────────────────────────────────
+
   @Delete(':id/icon')
-  @Roles(Role.ADMIN)
-  @ApiBearerAuth()
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: '[Admin] Remove the category icon' })
+  @HttpCode(HttpStatus.NO_CONTENT) // ← matches products deleteMedia
+  @ApiOperation({
+    summary: '[Admin] Remove the category icon (deletes from Cloudinary)',
+  })
   removeIcon(@Param('id', ParseUUIDPipe) id: string) {
-    return this.categoriesService.removeIcon(id);
+    return this.service.removeIcon(id);
+  }
+
+  // ── Toggle active ──────────────────────────────────────────────────────────
+
+  @Patch(':id/toggle')
+  @ApiOperation({ summary: '[Admin] Toggle isActive flag on a category' })
+  toggleActive(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.toggleActive(id);
+  }
+
+  // ── Hard delete ────────────────────────────────────────────────────────────
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: '[Admin] Hard-delete a category' })
+  @ApiResponse({ status: 409, description: 'Category still has children' })
+  remove(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.remove(id);
   }
 }

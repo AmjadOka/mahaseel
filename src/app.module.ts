@@ -27,6 +27,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { JwtModule } from '@nestjs/jwt';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { UploadModule } from './modules/upload/upload.module';
+import { BankAccountModule } from './modules/bank-account/bank-account.module';
 
 @Module({
   imports: [
@@ -113,6 +114,7 @@ import { UploadModule } from './modules/upload/upload.module';
     NotificationsModule,
     AdminModule,
     UploadModule,
+    BankAccountModule,
   ],
 })
 export class AppModule {}

@@ -20,10 +20,10 @@ export class AdminGuard implements CanActivate {
       throw new ForbiddenException('Admin access required');
     }
 
-    if (adminSecret !== this.config.get('app.adminSecret')) {
+    if (!adminSecret || adminSecret !== this.config.get('app.adminSecret')) {
+      console.log(`Invalid admin secret: ${adminSecret}`);
       throw new ForbiddenException('Invalid admin secret');
     }
-
     return true;
   }
 }

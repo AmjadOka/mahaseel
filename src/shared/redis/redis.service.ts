@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import Redis from 'ioredis';
 
 @Injectable()
@@ -45,5 +46,45 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   async ttl(key: string): Promise<number> {
     return this.client.ttl(key);
+  }
+
+  // ── Distributed locking ────────────────────────────────────────────────────
+
+  /**
+   * Attempts to acquire a distributed lock.
+   *
+   * Uses SET NX PX — atomic: only succeeds if the key does not exist.
+   * Returns a unique token on success, null if the lock is already held.
+   *
+   * @param key    - Lock key, e.g. "lock:auction:<productId>"
+   * @param ttlMs  - Auto-expiry in milliseconds — prevents deadlocks if the
+   *                 holder crashes before releasing.
+   * @returns token to pass into releaseLock(), or null if lock not acquired.
+   */
+  async acquireLock(key: string, ttlMs: number): Promise<string | null> {
+    const token = randomUUID();
+    const result = await this.client.set(key, token, 'PX', ttlMs, 'NX');
+    return result === 'OK' ? token : null;
+  }
+
+  /**
+   * Releases a lock — but ONLY if we still own it.
+   *
+   * The Lua script is atomic: it reads and deletes in a single operation so
+   * we never accidentally release a lock acquired by another process after
+   * our TTL expired.
+   *
+   * @param key   - Same key passed to acquireLock()
+   * @param token - Token returned by acquireLock()
+   */
+  async releaseLock(key: string, token: string): Promise<void> {
+    const script = `
+      if redis.call('get', KEYS[1]) == ARGV[1] then
+        return redis.call('del', KEYS[1])
+      else
+        return 0
+      end
+    `;
+    await this.client.eval(script, 1, key, token);
   }
 }

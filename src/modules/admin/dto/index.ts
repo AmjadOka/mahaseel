@@ -7,10 +7,15 @@ import {
   IsIn,
   MinLength,
   IsDateString,
+  IsInt,
+  Min,
+  Max,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { NotificationType } from 'src/common/enums/notification.enum';
 import { Role } from 'src/common/enums/role.enum';
+import { PaginationDto } from 'src/common/dto/pagination.dto';
+import { Type } from 'class-transformer';
 
 // ─── Farms ───────────────────────────────────────────────────────────────────
 
@@ -167,4 +172,24 @@ export class SuspendUserDto {
   @IsOptional()
   @IsString()
   reason?: string;
+}
+export class AdminUsersQueryDto extends PaginationDto {
+  @IsOptional()
+  @IsEnum(Role)
+  role?: Role;
+
+  @ApiPropertyOptional({ default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @ApiPropertyOptional({ default: 20 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number = 20;
 }

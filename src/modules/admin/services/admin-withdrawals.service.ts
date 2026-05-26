@@ -85,7 +85,7 @@ export class AdminWithdrawalsService {
     const qb = this.withdrawalsRepo
       .createQueryBuilder('w')
       .leftJoinAndSelect('w.merchant', 'merchant')
-      .leftJoinAndSelect('w.bankAccount', 'bankAccount')
+      //.leftJoinAndSelect('w.bankAccount', 'bankAccount')
       .where('w.status = :status', { status: WithdrawalStatus.PENDING })
       .orderBy('w.createdAt', 'ASC');
 

@@ -10,27 +10,29 @@ import {
   Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 
-export class CreateCategoryDto {
-  @ApiProperty({ example: 'خضروات', description: 'Arabic name' })
+/**
+ * All fields are optional — only send what needs to change.
+ * Icon is NOT here: it is uploaded as multipart/form-data via
+ * PUT /admin/categories/:id/icon using FileInterceptor.
+ */
+export class UpdateCategoryDto {
+  @ApiPropertyOptional({ example: 'خضروات طازجة' })
+  @IsOptional()
   @IsString()
   @MinLength(2)
   @MaxLength(100)
-  nameAr: string;
+  nameAr?: string;
 
-  @ApiProperty({ example: 'Vegetables', description: 'English name' })
+  @ApiPropertyOptional({ example: 'Fresh Vegetables' })
+  @IsOptional()
   @IsString()
   @MinLength(2)
   @MaxLength(100)
-  nameEn: string;
+  nameEn?: string;
 
-  @ApiPropertyOptional({
-    example: 'vegetables',
-    description:
-      'URL-safe slug — auto-generated from nameEn if omitted. ' +
-      'Lowercase letters, numbers, and hyphens only.',
-  })
+  @ApiPropertyOptional({ example: 'fresh-vegetables' })
   @IsOptional()
   @IsString()
   @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
@@ -40,21 +42,20 @@ export class CreateCategoryDto {
 
   @ApiPropertyOptional({
     example: null,
-    description:
-      'Parent category UUID — omit or pass null to create a top-level category',
+    description: 'Pass null to promote sub-category to top-level',
   })
   @IsOptional()
   @IsUUID()
   parentId?: string | null;
 
-  @ApiPropertyOptional({ example: 1, default: 0 })
+  @ApiPropertyOptional({ example: 2 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
   sortOrder?: number;
 
-  @ApiPropertyOptional({ example: true, default: true })
+  @ApiPropertyOptional({ example: false })
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;

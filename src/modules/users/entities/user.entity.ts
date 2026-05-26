@@ -19,6 +19,7 @@ import { Wallet } from '../../wallet/entities/wallet.entity';
 
 import { Notification } from '../../notifications/entities/notification.entity';
 import { FcmToken } from 'src/modules/notifications/entities/fcm-token.entity';
+import { BankAccount } from 'src/modules/bank-account/entities/bank-account.entity';
 
 @Entity('users')
 export class User {
@@ -217,4 +218,7 @@ export class User {
 
   @OneToMany(() => FcmToken, (t) => t.user)
   fcmTokens: FcmToken[];
+
+  @OneToMany(() => BankAccount, (account) => account.user)
+  bankAccounts: BankAccount[];
 }

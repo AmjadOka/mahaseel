@@ -6,6 +6,11 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
+    "migration:generate": "npx typeorm migration:generate src/database/migrations/$npm_config_name -d src/database/data-source.ts",
+    "migration:run": "npx typeorm migration:run -d src/database/data-source.ts",
+    "migration:revert": "npx typeorm migration:revert -d src/database/data-source.ts",
+    "seed:run": "npx typeorm-extension seed:run",
+    "seed:categories": "npx typeorm-extension seed:run --seed CategorySeeder",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
@@ -58,6 +63,7 @@
     "socket.io": "^4.8.3",
     "stripe": "^22.1.1",
     "swagger-ui-express": "^5.0.1",
+    "typeorm-extension": "^3.9.0",
     "uuid": "^9.0.1"
   },
   "devDependencies": {

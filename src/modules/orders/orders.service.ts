@@ -372,7 +372,7 @@ export class OrdersService {
     const cacheKey = CK.buyer(buyerId, page, limit);
 
     const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
+    if (cached) return JSON.parse(cached) as Order[];
 
     const qb = this.repo
       .createQueryBuilder('o')
@@ -392,7 +392,7 @@ export class OrdersService {
     const cacheKey = CK.merchant(merchantId, page, limit);
 
     const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
+    if (cached) return JSON.parse(cached) as Order[];
 
     const qb = this.repo
       .createQueryBuilder('o')
@@ -623,7 +623,7 @@ export class OrdersService {
           cancelledOrders.map((o) => o.id),
           {
             status: OrderStatus.PENDING,
-            rejectionReason: null,
+            rejectionReason: undefined,
           },
         );
       }

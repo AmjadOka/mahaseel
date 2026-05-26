@@ -38,7 +38,7 @@ export class AdminAuditService {
     }
   }
 
-  // ── Queries (for future Admin UI — "Activity Log" screen) ─────────────────
+  // ── Queries (for Admin UI — "Activity Log" screen) ─────────────────
 
   async getLogs(
     pagination: PaginationDto,

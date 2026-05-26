@@ -13,20 +13,7 @@ import {
 import { NotificationCreatedEvent } from '../events/notification-created.event';
 import { Platform } from 'src/common/enums/platform.enum';
 import { RedisService } from 'src/shared/redis/redis.service';
-
-// ── Cache constants ────────────────────────────────────────────────────────────
-
-const TTL = {
-  unread: 60 * 2, // 2 min — unread list and count; busted on every new notification
-  all: 60 * 1, // 1 min — paginated full list; short TTL only (can't bust all page variants)
-} as const;
-
-const CK = {
-  count: (userId: string) => `notifications:count:${userId}`,
-  unread: (userId: string) => `notifications:unread:${userId}`,
-  all: (userId: string, page: number, limit: number) =>
-    `notifications:all:${userId}:${page}:${limit}`,
-} as const;
+import { NOTIFICATIONS_CK, NOTIFICATIONS_TTL } from '../notifications.cache';
 
 @Injectable()
 export class NotificationsService {
@@ -170,7 +157,7 @@ export class NotificationsService {
     page = 1,
     limit = 20,
   ): Promise<{ data: Notification[]; total: number }> {
-    const cacheKey = CK.all(userId, page, limit);
+    const cacheKey = NOTIFICATIONS_CK.all(userId, page, limit);
 
     const cached = await this.redis.get(cacheKey);
     if (cached)
@@ -183,12 +170,16 @@ export class NotificationsService {
       take: limit,
     });
     const result = { data, total };
-    await this.redis.set(cacheKey, JSON.stringify(result), TTL.all);
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify(result),
+      NOTIFICATIONS_TTL.all,
+    );
     return result;
   }
 
   async getUnread(userId: string): Promise<Notification[]> {
-    const cached = await this.redis.get(CK.unread(userId));
+    const cached = await this.redis.get(NOTIFICATIONS_CK.unread(userId));
     if (cached) return JSON.parse(cached) as Notification[];
 
     const notifications = await this.notificationRepo.find({
@@ -197,22 +188,26 @@ export class NotificationsService {
     });
 
     await this.redis.set(
-      CK.unread(userId),
+      NOTIFICATIONS_CK.unread(userId),
       JSON.stringify(notifications),
-      TTL.unread,
+      NOTIFICATIONS_TTL.unread,
     );
     return notifications;
   }
 
   async countUnread(userId: string): Promise<number> {
-    const cached = await this.redis.get(CK.count(userId));
+    const cached = await this.redis.get(NOTIFICATIONS_CK.count(userId));
     if (cached) return parseInt(cached, 10);
 
     const count = await this.notificationRepo.count({
       where: { userId, isRead: false },
     });
 
-    await this.redis.set(CK.count(userId), String(count), TTL.unread);
+    await this.redis.set(
+      NOTIFICATIONS_CK.count(userId),
+      String(count),
+      NOTIFICATIONS_TTL.unread,
+    );
     return count;
   }
 
@@ -287,8 +282,8 @@ export class NotificationsService {
    */
   private async bustUnread(userId: string): Promise<void> {
     await Promise.all([
-      this.redis.del(CK.unread(userId)),
-      this.redis.del(CK.count(userId)),
+      this.redis.del(NOTIFICATIONS_CK.unread(userId)),
+      this.redis.del(NOTIFICATIONS_CK.count(userId)),
     ]);
   }
 }

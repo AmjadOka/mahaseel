@@ -19,9 +19,8 @@ import {
 import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../../../common/guards/admin.guard';
 import { AdminUsersService } from '../services/admin-users.service';
-import { SuspendUserDto } from '../dto/index';
+import { AdminUsersQueryDto, SuspendUserDto } from '../dto/index';
 import { Role } from 'src/common/enums/role.enum';
-import { PaginationDto } from '../../../common/dto/pagination.dto';
 import { CurrentUser } from 'src/common/decorators';
 import type { AuthUser } from 'src/common/types';
 
@@ -36,11 +35,18 @@ export class AdminUsersController {
   @ApiOperation({
     summary: '[Admin] List all users, optionally filtered by role',
   })
-  @ApiQuery({ name: 'role', enum: Role, required: false })
-  @ApiResponse({ status: 200, description: 'Paginated user list' })
-  getUsers(@Query() pagination: PaginationDto, @Query('role') role?: Role) {
-    // FIX C3: was usersService.getUsers(pagination, role) — role positional arg silently ignored.
-    // Now wraps role in a UserFilters object as the service signature requires.
+  @ApiQuery({
+    name: 'role',
+    enum: Role,
+    required: false,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated user list',
+  })
+  getUsers(@Query() query: AdminUsersQueryDto) {
+    const { role, ...pagination } = query;
+
     return this.usersService.getUsers(pagination, { role });
   }
 

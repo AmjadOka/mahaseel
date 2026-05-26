@@ -46,7 +46,6 @@ export interface FarmStats {
   approved: number;
   rejected: number;
   suspended: number;
-  totalAreaHectares: number;
 }
 
 export interface ApprovalPayload {
@@ -583,7 +582,6 @@ export class FarmsService {
     const rows = await qb
       .select('farm.status', 'status')
       .addSelect('COUNT(*)', 'count')
-      .addSelect('COALESCE(SUM(farm.areaHectares), 0)', 'totalArea')
       .groupBy('farm.status')
       .getRawMany<{ status: FarmStatus; count: string; totalArea: string }>();
 
@@ -593,13 +591,11 @@ export class FarmsService {
       approved: 0,
       rejected: 0,
       suspended: 0,
-      totalAreaHectares: 0,
     };
 
     for (const row of rows) {
       const count = parseInt(row.count, 10);
       base.total += count;
-      base.totalAreaHectares += parseFloat(row.totalArea);
 
       switch (row.status) {
         case FarmStatus.PENDING:

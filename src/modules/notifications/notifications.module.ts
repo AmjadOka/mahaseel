@@ -5,7 +5,7 @@ import { Notification } from './entities/notification.entity';
 import { FcmToken } from './entities/fcm-token.entity';
 
 import { NotificationsController } from './notifications.controller';
-import { NotificationsListener } from './listeners/notifications.listener';
+import { NotificationCreatedListener } from './listeners/notifications.listener';
 import { NotificationsGateway } from './gateways/notifications.gateway';
 import { FcmProvider } from './providers/fcm.provider';
 import { MailProvider } from './providers/mail.provider';
@@ -15,6 +15,7 @@ import { NotificationsProcessor } from './notifications.processor';
 import { NotificationsScheduler } from './notifications.scheduler';
 import { BullModule } from '@nestjs/bullmq';
 import { NOTIFICATIONS_QUEUE } from './notifications.constants';
+import { NotificationsSseService } from './services/notifications-sse.service';
 
 @Module({
   imports: [
@@ -29,7 +30,8 @@ import { NOTIFICATIONS_QUEUE } from './notifications.constants';
     NotificationsProcessor,
     NotificationsService,
     NotificationsDispatcher,
-    NotificationsListener,
+    NotificationCreatedListener,
+    NotificationsSseService,
     NotificationsGateway,
     FcmProvider,
     MailProvider,

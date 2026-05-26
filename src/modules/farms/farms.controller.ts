@@ -9,7 +9,6 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
-  BadRequestException,
   UseInterceptors,
   UploadedFiles,
 } from '@nestjs/common';
@@ -86,9 +85,7 @@ export class FarmsController {
     @CurrentUser() user: AuthUser,
     @UploadedFiles() files: Express.Multer.File[],
   ) {
-    if (!files?.length) {
-      throw new BadRequestException('No files provided');
-    }
+    if (!Array.isArray(files)) files = [files];
 
     const pipe = new FileValidationPipe();
     files.forEach((f) => pipe.transform(f));

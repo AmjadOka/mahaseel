@@ -17,6 +17,7 @@ import {
 } from 'src/common/enums/wallet.enum';
 import { WithdrawalStatus } from 'src/common/enums/withdrawal.enum';
 import { DecimalTransformer } from 'src/database/transformers/decimal.transformer';
+import { BankAccount } from 'src/modules/bank-account/entities/bank-account.entity';
 
 @Entity('wallets')
 export class Wallet {
@@ -102,6 +103,10 @@ export class WalletTransaction {
   @ManyToOne(() => Wallet, (w) => w.transactions)
   @JoinColumn({ name: 'wallet_id' })
   wallet: Wallet;
+
+  @ManyToOne(() => BankAccount, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'bank_account_id' })
+  bankAccount: BankAccount | null;
 }
 
 @Entity('withdrawal_requests')
@@ -140,4 +145,10 @@ export class WithdrawalRequest {
   @ManyToOne(() => User)
   @JoinColumn({ name: 'merchant_id' })
   merchant: User;
+
+  @ManyToOne(() => BankAccount, {
+    nullable: true,
+  })
+  @JoinColumn({ name: 'bank_account_id' })
+  bankAccount: BankAccount;
 }

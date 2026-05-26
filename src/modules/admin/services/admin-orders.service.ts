@@ -106,9 +106,6 @@ export class AdminOrdersService {
     return paginate(qb, Number(pagination.page), Number(pagination.limit));
   }
 
-  /**
-   * FIX M8: Now uses AWAITING_PAYMENT (consistent with dashboard).
-   */
   async getOpenDisputes(pagination: PaginationDto) {
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
@@ -226,7 +223,6 @@ export class AdminOrdersService {
 
     this.logger.warn(`Order force-cancelled [id=${id}] by admin [${adminId}]`);
 
-    // NEW: audit log
     await this.auditService.log({
       adminId,
       action: 'FORCE_CANCEL_ORDER',
@@ -282,10 +278,6 @@ export class AdminOrdersService {
         deliveryStatus: DeliveryStatus.DELIVERED,
       });
 
-      /**
-       * FIX M1: Wallet release was permanently commented out — merchants were never paid.
-       * Now wired: only release funds if the order was already ACCEPTED (i.e. payment captured).
-       */
       if (order.status === OrderStatus.ACCEPTED) {
         await this.walletService.releasePending(
           order.merchantId,
@@ -298,7 +290,6 @@ export class AdminOrdersService {
 
     this.logger.log(`Order force-completed [id=${id}] by admin [${adminId}]`);
 
-    // NEW: audit log
     await this.auditService.log({
       adminId,
       action: 'FORCE_COMPLETE_ORDER',

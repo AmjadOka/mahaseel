@@ -1,9 +1,9 @@
-// modules/auctions/auctions.service.ts
 import {
   Injectable,
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan, DataSource } from 'typeorm';
@@ -16,6 +16,7 @@ import { PaymentsService } from '../payments/payments.service';
 import { OrdersService } from '../orders/orders.service';
 import { Order } from '../orders/entities/order.entity';
 import { Product } from '../products/entities/product.entity';
+import { RedisService } from 'src/shared/redis/redis.service';
 
 import { ProductStatus } from 'src/common/enums/product.enum';
 import { BidStatus } from 'src/common/enums/bid.enum';
@@ -24,6 +25,30 @@ import { SaleMethod } from 'src/common/enums/Unit.enum';
 import { UploadService } from '../upload/upload.service';
 
 type LoserRow = { buyerId: string };
+
+// ── Lock constants ─────────────────────────────────────────────────────────────
+
+/**
+ * TTL for auction locks.
+ * Must be longer than the slowest operation inside the lock (the DB transaction).
+ * Stripe calls happen AFTER the lock is released so 15 s is safe.
+ */
+const AUCTION_LOCK_TTL_MS = 15_000;
+
+const LOCK_KEY = (productId: string) => `lock:auction:${productId}`;
+
+// modules/auctions/auctions.cache.ts
+
+const AUCTIONS_TTL = {
+  bidsForProduct: 60 * 2, // 2 min — merchant bid list, busted on every bid change
+  myBids: 60 * 2, // 2 min — buyer's active bids, busted on every bid change
+} as const;
+
+const AUCTIONS_CK = {
+  bidsForProduct: (productId: string) => `auctions:bids:product:${productId}`,
+  myBids: (buyerId: string) => `auctions:bids:buyer:${buyerId}`,
+} as const;
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Injectable()
 export class AuctionsService {
@@ -39,6 +64,7 @@ export class AuctionsService {
     private paymentsService: PaymentsService,
     private ordersService: OrdersService,
     private readonly uploadService: UploadService,
+    private readonly redis: RedisService,
     private dataSource: DataSource,
   ) {}
 
@@ -49,25 +75,28 @@ export class AuctionsService {
   /**
    * Places a new bid on an active auction product.
    *
-   * Business rules:
-   * - Product must be ACTIVE, AUCTION type, and not expired.
-   * - Merchant cannot bid on their own product.
-   * - Bid amount must strictly exceed current highest bid (or start price).
-   * - Buyer's previous ACTIVE bid on this product is marked LOST before the new one is saved.
-   * - Product.currentBid is updated atomically inside the transaction.
-   *
-   * Post-commit:
-   * - WebSocket bid_update event is emitted to the auction room.
-   * - Merchant is notified of the new bid.
+   * Race condition protection:
+   * - Redis lock (LOCK_KEY) prevents concurrent bids, acceptBid, and
+   *   closeExpiredAuctions from running simultaneously on the same product.
+   * - Pessimistic write lock inside the transaction is a second safety net
+   *   for cases where the Redis lock is unavailable.
    */
   async placeBid(
     buyerId: string,
     dto: PlaceBidDto,
     ipAddress?: string,
   ): Promise<AuctionBid> {
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    // ── Acquire distributed lock ───────────────────────────────────────────
+    const lockToken = await this.redis.acquireLock(
+      LOCK_KEY(dto.productId),
+      AUCTION_LOCK_TTL_MS,
+    );
+
+    if (!lockToken) {
+      throw new ConflictException(
+        'Auction is currently being updated. Please try again in a moment.',
+      );
+    }
 
     let savedBid: AuctionBid;
     let productName: string;
@@ -75,72 +104,80 @@ export class AuctionsService {
     let totalBids: number;
 
     try {
-      // ── 1. Lock and verify product ──────────────────────────────────────
-      const product = await queryRunner.manager
-        .createQueryBuilder(Product, 'product')
-        .setLock('pessimistic_write')
-        .where('product.id = :id', { id: dto.productId })
-        .andWhere('product.isDeleted = false')
-        .getOne();
+      const queryRunner = this.dataSource.createQueryRunner();
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
 
-      if (!product) throw new NotFoundException('Product not found');
-      if (product.saleMethod !== SaleMethod.AUCTION)
-        throw new BadRequestException('This product is not an auction');
-      if (product.status !== ProductStatus.ACTIVE)
-        throw new BadRequestException('Auction is not active');
-      if (new Date() > product.auctionEndAt)
-        throw new BadRequestException('Auction has ended');
-      if (product.merchantId === buyerId)
-        throw new ForbiddenException('You cannot bid on your own product');
+      try {
+        // ── 1. Lock and verify product ────────────────────────────────────
+        const product = await queryRunner.manager
+          .createQueryBuilder(Product, 'product')
+          .setLock('pessimistic_write')
+          .where('product.id = :id', { id: dto.productId })
+          .andWhere('product.isDeleted = false')
+          .getOne();
 
-      // ── 2. Validate bid amount ───────────────────────────────────────────
-      const minBid = Number(product.currentBid ?? product.auctionStartPrice);
-      if (!Number.isFinite(dto.amount) || dto.amount <= 0)
-        throw new BadRequestException('Bid amount must be a positive number');
-      if (dto.amount <= minBid)
-        throw new BadRequestException(
-          `Bid must be greater than current bid: ${minBid}`,
-        );
+        if (!product) throw new NotFoundException('Product not found');
+        if (product.saleMethod !== SaleMethod.AUCTION)
+          throw new BadRequestException('This product is not an auction');
+        if (product.status !== ProductStatus.ACTIVE)
+          throw new BadRequestException('Auction is not active');
+        if (new Date() > product.auctionEndAt)
+          throw new BadRequestException('Auction has ended');
+        if (product.merchantId === buyerId)
+          throw new ForbiddenException('You cannot bid on your own product');
 
-      // ── 3. Mark buyer's previous active bid on this product as LOST ──────
-      await queryRunner.manager
-        .getRepository(AuctionBid)
-        .update(
-          { productId: dto.productId, buyerId, status: BidStatus.ACTIVE },
-          { status: BidStatus.LOST },
-        );
+        // ── 2. Validate bid amount ────────────────────────────────────────
+        const minBid = Number(product.currentBid ?? product.auctionStartPrice);
+        if (!Number.isFinite(dto.amount) || dto.amount <= 0)
+          throw new BadRequestException('Bid amount must be a positive number');
+        if (dto.amount <= minBid)
+          throw new BadRequestException(
+            `Bid must be greater than current bid: ${minBid}`,
+          );
 
-      // ── 4. Save new bid ──────────────────────────────────────────────────
-      const bid = queryRunner.manager.create(AuctionBid, {
-        productId: dto.productId,
-        buyerId,
-        amount: dto.amount,
-        status: BidStatus.ACTIVE,
-        ipAddress,
-      });
-      savedBid = await queryRunner.manager.save(AuctionBid, bid);
+        // ── 3. Mark buyer's previous active bid LOST ──────────────────────
+        await queryRunner.manager
+          .getRepository(AuctionBid)
+          .update(
+            { productId: dto.productId, buyerId, status: BidStatus.ACTIVE },
+            { status: BidStatus.LOST },
+          );
 
-      // ── 5. Update product's current bid ─────────────────────────────────
-      product.currentBid = dto.amount;
-      await queryRunner.manager.save(Product, product);
+        // ── 4. Save new bid ───────────────────────────────────────────────
+        const bid = queryRunner.manager.create(AuctionBid, {
+          productId: dto.productId,
+          buyerId,
+          amount: dto.amount,
+          status: BidStatus.ACTIVE,
+          ipAddress,
+        });
+        savedBid = await queryRunner.manager.save(AuctionBid, bid);
 
-      productName = product.name;
-      merchantId = product.merchantId;
+        // ── 5. Update product's current bid ──────────────────────────────
+        product.currentBid = dto.amount;
+        await queryRunner.manager.save(Product, product);
 
-      await queryRunner.commitTransaction();
+        productName = product.name;
+        merchantId = product.merchantId;
 
-      totalBids = await this.bidsRepo.count({
-        where: { productId: dto.productId },
-      });
-    } catch (error) {
-      if (queryRunner.isTransactionActive)
-        await queryRunner.rollbackTransaction();
-      throw error;
+        await queryRunner.commitTransaction();
+
+        totalBids = await this.bidsRepo.count({
+          where: { productId: dto.productId },
+        });
+      } catch (error) {
+        if (queryRunner.isTransactionActive)
+          await queryRunner.rollbackTransaction();
+        throw error;
+      } finally {
+        await queryRunner.release();
+      }
     } finally {
-      await queryRunner.release();
+      await this.redis.releaseLock(LOCK_KEY(dto.productId), lockToken);
     }
 
-    // ── Post-commit side-effects ─────────────────────────────────────────
+    // ── Post-commit side-effects (outside lock — Stripe/notifications are slow) ──
     this.auctionsGateway.emitBidUpdate(dto.productId, {
       bidId: savedBid.id,
       amount: dto.amount,
@@ -164,69 +201,81 @@ export class AuctionsService {
   // WITHDRAW BID
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Withdraws a buyer's active bid.
-   *
-   * After withdrawal, product.currentBid is updated to the next highest
-   * active bid (or null if no bids remain).
-   */
   async withdrawBid(bidId: string, buyerId: string): Promise<void> {
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    // Load bid first to know which product to lock
+    const bidSnapshot = await this.bidsRepo.findOne({
+      where: { id: bidId, buyerId },
+    });
+    if (!bidSnapshot) throw new NotFoundException('Bid not found');
+
+    const lockToken = await this.redis.acquireLock(
+      LOCK_KEY(bidSnapshot.productId),
+      AUCTION_LOCK_TTL_MS,
+    );
+
+    if (!lockToken) {
+      throw new ConflictException(
+        'Auction is currently being updated. Please try again in a moment.',
+      );
+    }
 
     let productId: string;
     let newCurrentBid: number | null;
 
     try {
-      // ── 1. Load and validate bid ─────────────────────────────────────────
-      const bid = await queryRunner.manager
-        .getRepository(AuctionBid)
-        .findOne({ where: { id: bidId, buyerId } });
+      const queryRunner = this.dataSource.createQueryRunner();
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
 
-      if (!bid) throw new NotFoundException('Bid not found');
-      if (bid.status !== BidStatus.ACTIVE)
-        throw new BadRequestException('Bid is no longer active');
+      try {
+        const bid = await queryRunner.manager
+          .getRepository(AuctionBid)
+          .findOne({ where: { id: bidId, buyerId } });
 
-      // ── 2. Lock product ──────────────────────────────────────────────────
-      const product = await queryRunner.manager
-        .createQueryBuilder(Product, 'product')
-        .setLock('pessimistic_write')
-        .where('product.id = :id', { id: bid.productId })
-        .getOne();
+        if (!bid) throw new NotFoundException('Bid not found');
+        if (bid.status !== BidStatus.ACTIVE)
+          throw new BadRequestException('Bid is no longer active');
 
-      if (!product) throw new NotFoundException('Product not found');
-      if (product.status !== ProductStatus.ACTIVE)
-        throw new BadRequestException('Cannot withdraw from a closed auction');
+        const product = await queryRunner.manager
+          .createQueryBuilder(Product, 'product')
+          .setLock('pessimistic_write')
+          .where('product.id = :id', { id: bid.productId })
+          .getOne();
 
-      // ── 3. Mark bid WITHDRAWN ────────────────────────────────────────────
-      bid.status = BidStatus.WITHDRAWN;
-      await queryRunner.manager.save(AuctionBid, bid);
+        if (!product) throw new NotFoundException('Product not found');
+        if (product.status !== ProductStatus.ACTIVE)
+          throw new BadRequestException(
+            'Cannot withdraw from a closed auction',
+          );
 
-      // ── 4. Recalculate current bid ───────────────────────────────────────
-      const nextHighest = await queryRunner.manager
-        .getRepository(AuctionBid)
-        .findOne({
-          where: { productId: bid.productId, status: BidStatus.ACTIVE },
-          order: { amount: 'DESC' },
-        });
+        bid.status = BidStatus.WITHDRAWN;
+        await queryRunner.manager.save(AuctionBid, bid);
 
-      product.currentBid = nextHighest ? nextHighest.amount : null;
-      await queryRunner.manager.save(Product, product);
+        const nextHighest = await queryRunner.manager
+          .getRepository(AuctionBid)
+          .findOne({
+            where: { productId: bid.productId, status: BidStatus.ACTIVE },
+            order: { amount: 'DESC' },
+          });
 
-      productId = bid.productId;
-      newCurrentBid = product.currentBid;
+        product.currentBid = nextHighest ? nextHighest.amount : null;
+        await queryRunner.manager.save(Product, product);
 
-      await queryRunner.commitTransaction();
-    } catch (error) {
-      if (queryRunner.isTransactionActive)
-        await queryRunner.rollbackTransaction();
-      throw error;
+        productId = bid.productId;
+        newCurrentBid = product.currentBid;
+
+        await queryRunner.commitTransaction();
+      } catch (error) {
+        if (queryRunner.isTransactionActive)
+          await queryRunner.rollbackTransaction();
+        throw error;
+      } finally {
+        await queryRunner.release();
+      }
     } finally {
-      await queryRunner.release();
+      await this.redis.releaseLock(LOCK_KEY(bidSnapshot.productId), lockToken);
     }
 
-    // ── Post-commit side-effects ─────────────────────────────────────────
     this.auctionsGateway.emitBidUpdate(productId, {
       currentBid: newCurrentBid,
     });
@@ -237,74 +286,96 @@ export class AuctionsService {
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * Merchant manually accepts a specific active bid, closing the auction early.
+   * Race condition fixed:
    *
-   * Flow:
-   * 1. All active bids on this product are marked LOST.
-   * 2. The chosen bid is marked WON.
-   * 3. Product is marked SOLD.
-   * 4. An Order in AWAITING_PAYMENT is created via ordersService.createAuctionOrder()
-   *    — all financials (platformFee, netAmount) are computed server-side there.
+   * Previously, the product status pre-check happened OUTSIDE the transaction.
+   * closeExpiredAuctions could mark the product SOLD between that check and the
+   * transaction start — creating two orders for the same auction.
    *
-   * Post-commit:
-   * - auction_closed WebSocket event is emitted.
-   * - Stripe Checkout Session is created; payment link sent to winner.
-   * - Winner and losers are notified.
-   *
-   * Wallet is NOT credited here — that happens in the payment webhook after
-   * the buyer completes payment.
    */
   async acceptBid(
     bidId: string,
     merchantId: string,
   ): Promise<{ orderId: string; bid: AuctionBid | null }> {
-    // ── 1. Load bid with relations (outside transaction — read-only pre-check) ─
-    const bid = await this.bidsRepo.findOne({
+    const bidSnapshot = await this.bidsRepo.findOne({
       where: { id: bidId, status: BidStatus.ACTIVE },
       relations: ['product', 'buyer'],
     });
 
-    if (!bid) throw new NotFoundException('Bid not found or no longer active');
-    if (bid.product.merchantId !== merchantId)
+    if (!bidSnapshot)
+      throw new NotFoundException('Bid not found or no longer active');
+    if (bidSnapshot.product.merchantId !== merchantId)
       throw new ForbiddenException('Access denied');
-    if (bid.product.status !== ProductStatus.ACTIVE)
-      throw new BadRequestException('Auction is not active');
+
+    // ── Acquire lock before any status checks ──────────────────────────────
+    const lockToken = await this.redis.acquireLock(
+      LOCK_KEY(bidSnapshot.productId),
+      AUCTION_LOCK_TTL_MS,
+    );
+
+    if (!lockToken) {
+      throw new ConflictException(
+        'Auction is currently being updated. Please try again in a moment.',
+      );
+    }
 
     let createdOrder: Order | null = null;
+    const bid = bidSnapshot;
 
-    // ── 2. Transaction ────────────────────────────────────────────────────
-    await this.dataSource.transaction(async (manager) => {
-      // Mark all active bids on this product LOST
-      await manager
-        .getRepository(AuctionBid)
-        .update(
-          { productId: bid.productId, status: BidStatus.ACTIVE },
-          { status: BidStatus.LOST },
+    try {
+      // ── Re-verify status INSIDE the lock ────────────────────────────────
+      // This replaces the pre-check that was outside the transaction.
+      // Any concurrent operation (closeExpiredAuctions) that changed the
+      // product status will have already released the lock, so we see
+      // the final state here.
+      const freshProduct = await this.productsRepo.findOne({
+        where: { id: bid.productId },
+      });
+
+      if (!freshProduct || freshProduct.status !== ProductStatus.ACTIVE) {
+        throw new BadRequestException('Auction is not active');
+      }
+
+      const freshBid = await this.bidsRepo.findOne({
+        where: { id: bidId, status: BidStatus.ACTIVE },
+      });
+
+      if (!freshBid) {
+        throw new NotFoundException('Bid is no longer active');
+      }
+
+      // ── Transaction ──────────────────────────────────────────────────────
+      await this.dataSource.transaction(async (manager) => {
+        await manager
+          .getRepository(AuctionBid)
+          .update(
+            { productId: bid.productId, status: BidStatus.ACTIVE },
+            { status: BidStatus.LOST },
+          );
+
+        await manager
+          .getRepository(AuctionBid)
+          .update({ id: bid.id }, { status: BidStatus.WON });
+
+        await manager
+          .getRepository(Product)
+          .update(
+            { id: bid.productId },
+            { status: ProductStatus.SOLD, quantity: 0 },
+          );
+
+        createdOrder = await this.ordersService.createAuctionOrder(
+          manager,
+          bid.productId,
+          merchantId,
+          bid.buyerId,
+          Number(bid.amount),
+          Number(bid.product.quantity),
         );
-
-      // Re-mark the chosen bid as WON
-      await manager
-        .getRepository(AuctionBid)
-        .update({ id: bid.id }, { status: BidStatus.WON });
-
-      // Mark product SOLD
-      await manager
-        .getRepository(Product)
-        .update(
-          { id: bid.productId },
-          { status: ProductStatus.SOLD, quantity: 0 },
-        );
-
-      // Delegate order creation fully to OrdersService — fees computed there
-      createdOrder = await this.ordersService.createAuctionOrder(
-        manager,
-        bid.productId,
-        merchantId,
-        bid.buyerId,
-        Number(bid.amount),
-        Number(bid.product.quantity),
-      );
-    });
+      });
+    } finally {
+      await this.redis.releaseLock(LOCK_KEY(bid.productId), lockToken);
+    }
 
     if (!createdOrder) {
       throw new Error(
@@ -314,14 +385,13 @@ export class AuctionsService {
 
     const order = createdOrder as Order;
 
-    // ── 3. Post-commit side-effects ──────────────────────────────────────
+    // ── Post-commit side-effects (outside lock) ────────────────────────────
     this.auctionsGateway.emitAuctionClosed(
       bid.productId,
       bid.buyerId,
       bid.amount,
     );
 
-    // Create Stripe Checkout Session — sends payment link by email + push
     await this.paymentsService.autoInitiateForOrder(
       order.id,
       bid.buyerId,
@@ -330,7 +400,6 @@ export class AuctionsService {
       Number(bid.amount),
     );
 
-    // Notify winner
     await this.notificationsService.notify(bid.buyerId, {
       type: NotificationType.AUCTION_WON,
       title: '',
@@ -341,7 +410,6 @@ export class AuctionsService {
       referenceId: order.id,
     });
 
-    // Notify losing bidders
     const losers: LoserRow[] = await this.bidsRepo
       .createQueryBuilder('b')
       .select('DISTINCT b.buyerId', 'buyerId')
@@ -374,22 +442,16 @@ export class AuctionsService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // CLOSE EXPIRED AUCTIONS  (BullMQ cron — every minute)
+  // CLOSE EXPIRED AUCTIONS  (cron — every minute)
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * Scans for auctions whose `auctionEndAt` has passed and closes each one.
-   *
-   * For each expired auction:
-   * - If there's a top bid: marks it WON, all others LOST, product SOLD,
-   *   creates an Order in AWAITING_PAYMENT via ordersService.createAuctionOrder(),
-   *   then initiates payment and notifies winner + losers.
-   * - If no bids: marks product EXPIRED and notifies merchant.
-   *
-   * A failure in any single auction is caught and logged so the loop
-   * continues processing remaining auctions.
-   *
-   * Wallet is NOT credited here — credited only by the payment webhook.
+   * Each product is locked individually before processing.
+   * If acceptBid already closed an auction before this cron reached it,
+   * the lock acquisition will either:
+   * - Block until acceptBid releases (then the re-lock inside the transaction
+   *   finds status = SOLD and skips silently), or
+   * - Find the product already non-ACTIVE and skip it in the re-lock check.
    */
   async closeExpiredAuctions(): Promise<void> {
     const expiredProducts = await this.productsRepo.find({
@@ -401,6 +463,18 @@ export class AuctionsService {
     });
 
     for (const expiredProduct of expiredProducts) {
+      // ── Acquire per-product lock ───────────────────────────────────────
+      const lockToken = await this.redis.acquireLock(
+        LOCK_KEY(expiredProduct.id),
+        AUCTION_LOCK_TTL_MS,
+      );
+
+      if (!lockToken) {
+        // Another process (acceptBid or a previous cron run) is handling this
+        // product — skip it and let that process finish.
+        continue;
+      }
+
       const queryRunner = this.dataSource.createQueryRunner();
       await queryRunner.connect();
       await queryRunner.startTransaction();
@@ -408,7 +482,7 @@ export class AuctionsService {
       let createdOrder: Order | null = null;
 
       try {
-        // ── 1. Re-lock product row ───────────────────────────────────────
+        // ── Re-lock and re-verify inside transaction ─────────────────────
         const product = await queryRunner.manager
           .createQueryBuilder(Product, 'product')
           .setLock('pessimistic_write')
@@ -418,7 +492,7 @@ export class AuctionsService {
           })
           .getOne();
 
-        // Already closed by another worker — skip silently
+        // Already closed by acceptBid after our Redis lock was acquired — skip
         if (!product) {
           await queryRunner.rollbackTransaction();
           continue;
@@ -433,7 +507,6 @@ export class AuctionsService {
           });
 
         if (topBid) {
-          // ── 2. Mark all active bids LOST ──────────────────────────────
           await queryRunner.manager
             .getRepository(AuctionBid)
             .update(
@@ -441,12 +514,10 @@ export class AuctionsService {
               { status: BidStatus.LOST },
             );
 
-          // ── 3. Re-mark top bid WON ────────────────────────────────────
           await queryRunner.manager
             .getRepository(AuctionBid)
             .update({ id: topBid.id }, { status: BidStatus.WON });
 
-          // ── 4. Mark product SOLD ──────────────────────────────────────
           await queryRunner.manager
             .getRepository(Product)
             .update(
@@ -454,7 +525,6 @@ export class AuctionsService {
               { status: ProductStatus.SOLD, quantity: 0 },
             );
 
-          // ── 5. Create order — fees computed inside createAuctionOrder ──
           createdOrder = await this.ordersService.createAuctionOrder(
             queryRunner.manager,
             product.id,
@@ -466,7 +536,10 @@ export class AuctionsService {
 
           await queryRunner.commitTransaction();
 
-          // ── Post-commit: winner path ───────────────────────────────────
+          // ── Release lock before Stripe ───────────────────────────────
+          await this.redis.releaseLock(LOCK_KEY(expiredProduct.id), lockToken);
+
+          // ── Post-commit: winner path ─────────────────────────────────
           this.auctionsGateway.emitAuctionClosed(
             product.id,
             topBid.buyerId,
@@ -491,7 +564,6 @@ export class AuctionsService {
             referenceId: createdOrder.id,
           });
 
-          // Notify losers
           const losers: LoserRow[] = await this.bidsRepo
             .createQueryBuilder('b')
             .select('DISTINCT b.buyerId', 'buyerId')
@@ -514,12 +586,15 @@ export class AuctionsService {
             ),
           );
         } else {
-          // ── No bids — mark product EXPIRED ────────────────────────────
+          // ── No bids — mark EXPIRED ────────────────────────────────────
           await queryRunner.manager
             .getRepository(Product)
             .update({ id: product.id }, { status: ProductStatus.EXPIRED });
 
           await queryRunner.commitTransaction();
+
+          // Release before notifications
+          await this.redis.releaseLock(LOCK_KEY(expiredProduct.id), lockToken);
 
           this.auctionsGateway.emitAuctionClosed(product.id, null, null);
 
@@ -537,6 +612,9 @@ export class AuctionsService {
         if (queryRunner.isTransactionActive) {
           await queryRunner.rollbackTransaction();
         }
+        // Release lock on error so the next cron run can retry
+        await this.redis.releaseLock(LOCK_KEY(expiredProduct.id), lockToken);
+
         console.error(
           `[closeExpiredAuctions] Failed for product ${expiredProduct.id}:`,
           error,
@@ -551,10 +629,6 @@ export class AuctionsService {
   // QUERIES
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Returns all bids on a merchant's auction product, highest first.
-   * Merchant ownership is verified before returning data.
-   */
   async getBidsForProduct(
     productId: string,
     merchantId: string,
@@ -573,9 +647,6 @@ export class AuctionsService {
     });
   }
 
-  /**
-   * Returns all active bids placed by the authenticated buyer.
-   */
   async getMyBids(buyerId: string): Promise<AuctionBid[]> {
     return this.bidsRepo.find({
       where: { buyerId, status: BidStatus.ACTIVE },
@@ -584,10 +655,6 @@ export class AuctionsService {
     });
   }
 
-  /**
-   * Uploads or replaces the cover image for an auction product.
-   * Validates the product is an auction and belongs to the merchant.
-   */
   async uploadImage(
     productId: string,
     merchantId: string,
@@ -597,14 +664,10 @@ export class AuctionsService {
       where: { id: productId },
     });
     if (!product) throw new NotFoundException('Product not found');
-
-    if (product.merchantId !== merchantId) {
+    if (product.merchantId !== merchantId)
       throw new ForbiddenException('You do not own this product');
-    }
-
-    if (product.saleMethod !== SaleMethod.AUCTION) {
+    if (product.saleMethod !== SaleMethod.AUCTION)
       throw new BadRequestException('Product is not an auction');
-    }
 
     const uploaded = product.auctionImagePublicId
       ? await this.uploadService.replace(
@@ -626,23 +689,17 @@ export class AuctionsService {
     return updatedProduct;
   }
 
-  /** Removes the auction cover image from Cloudinary and clears DB fields. */
   async removeImage(productId: string, merchantId: string): Promise<void> {
     const product = await this.productsRepo.findOne({
       where: { id: productId },
     });
     if (!product) throw new NotFoundException('Product not found');
-
-    if (product.merchantId !== merchantId) {
+    if (product.merchantId !== merchantId)
       throw new ForbiddenException('You do not own this product');
-    }
-
-    if (!product.auctionImagePublicId) {
+    if (!product.auctionImagePublicId)
       throw new BadRequestException('No image to remove');
-    }
 
     await this.uploadService.delete(product.auctionImagePublicId);
-
     await this.productsRepo.update(productId, {
       auctionImageUrl: undefined,
       auctionImagePublicId: undefined,
