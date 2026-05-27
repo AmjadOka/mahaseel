@@ -105,6 +105,15 @@ export class UploadService {
         },
       );
 
+      uploadStream.on('error', (err) =>
+        reject(
+          // ← was missing
+          new InternalServerErrorException(
+            err?.message ?? 'Cloudinary stream error',
+          ),
+        ),
+      );
+
       uploadStream.end(buffer);
     });
   }

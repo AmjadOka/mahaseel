@@ -30,6 +30,7 @@ import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { paginate } from 'src/shared/pagination/pagination.helper';
 import { UploadService } from '../upload/upload.service';
 import { RedisService } from 'src/shared/redis/redis.service';
+import { CategoriesService } from '../categories/categories.service';
 export interface ProductFilters {
   status?: ProductStatus;
   saleMethod?: SaleMethod;
@@ -84,6 +85,7 @@ export class ProductsService {
 
     private readonly uploadService: UploadService,
     private readonly farmsService: FarmsService,
+    private readonly categoriesService: CategoriesService,
     private readonly redis: RedisService,
   ) {}
 
@@ -114,6 +116,12 @@ export class ProductsService {
 
   async create(merchantId: string, dto: CreateProductDto): Promise<Product> {
     const farm = await this.farmsService.findOne(dto.farmId, merchantId);
+    if (dto.categoryId) {
+      const category = await this.categoriesService.findOne(dto.categoryId);
+      if (!category) {
+        throw new NotFoundException('Category not found');
+      }
+    }
     const productAvailable = await this.repo.findOne({
       where: {
         farmId: dto.farmId,

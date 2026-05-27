@@ -2,27 +2,24 @@ import {
   Controller,
   Get,
   Patch,
-  Post,
   Delete,
   Param,
   Body,
-  UploadedFile,
-  UseInterceptors,
   UseGuards,
   ParseUUIDPipe,
   HttpCode,
   HttpStatus,
+  Req,
+  BadRequestException,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
 
 import { UsersService } from './users.service';
 import type { UpdateProfileDto } from './users.service';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { CurrentUser } from 'src/common/decorators';
 import { ApiBody, ApiConsumes, ApiOperation } from '@nestjs/swagger';
-import { memoryStorage } from 'multer';
+import type { FastifyRequest } from 'fastify';
 import { FileValidationPipe } from '../upload/validation.pipe';
-
 // ─── Controller ───────────────────────────────────────────────────────────────
 
 @Controller('users')
@@ -74,7 +71,7 @@ export class UsersController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Post('me/avatar')
+  @Patch('me/avatar')
   @ApiOperation({ summary: 'Upload or replace the current user avatar' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -83,12 +80,32 @@ export class UsersController {
       properties: { file: { type: 'string', format: 'binary' } },
     },
   })
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() })) // ← memoryStorage, never disk
-  uploadAvatar(
+  async uploadAvatar(
     @CurrentUser('id') id: string,
-    @UploadedFile(FileValidationPipe) file: Express.Multer.File, // ← validated before hitting service
+    @Req() req: FastifyRequest,
   ) {
-    return this.usersService.uploadAvatar(id, file); // ← pass whole file, not buffer parts
+    let file: Express.Multer.File | null = null;
+
+    for await (const part of req.parts()) {
+      if (part.type === 'file' && !file) {
+        const buffer = await part.toBuffer();
+        file = {
+          fieldname: part.fieldname,
+          originalname: part.filename,
+          mimetype: part.mimetype,
+          buffer,
+          size: buffer.length,
+          encoding: part.encoding,
+        } as Express.Multer.File;
+      }
+    }
+
+    if (!file) {
+      throw new BadRequestException('No file provided');
+    }
+
+    new FileValidationPipe().transform(file);
+    return this.usersService.uploadAvatar(id, file);
   }
 
   /**

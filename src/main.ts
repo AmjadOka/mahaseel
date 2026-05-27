@@ -43,6 +43,7 @@ async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     fastifyAdapter,
+    { bodyParser: false },
   );
 
   const config = app.get(ConfigService);
@@ -53,9 +54,11 @@ async function bootstrap() {
   // Multipart
   await app.register(multipart, {
     limits: {
-      fileSize: 100 * 1024 * 1024,
+      fileSize: 5 * 1024 * 1024, // 5 MB per file — match your validation pipe
       files: 10,
+      fieldSize: 1024, // non-file fields, small cap
     },
+    attachFieldsToBody: false,
   });
 
   // Global prefix

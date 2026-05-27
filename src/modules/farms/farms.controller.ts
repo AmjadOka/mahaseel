@@ -9,8 +9,10 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
-  UseInterceptors,
-  UploadedFiles,
+  Req,
+  BadRequestException,
+  ParseUUIDPipe,
+  Patch,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -26,9 +28,8 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { Role } from 'src/common/enums/role.enum';
 import type { AuthUser } from 'src/common/types';
-import { FileValidationPipe } from '../upload/validation.pipe';
-import { FilesInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
+import { FilesValidationPipe } from '../upload/validation.pipe';
+import type { FastifyRequest } from 'fastify';
 
 @ApiTags('farms')
 @Controller('farms')
@@ -65,7 +66,8 @@ export class FarmsController {
   ) {
     return this.farmsService.update(id, user.sub, dto);
   }
-  @Post(':id/media')
+
+  @Patch(':id/media')
   @ApiOperation({ summary: 'Upload farm images/videos (max 10)' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -79,16 +81,31 @@ export class FarmsController {
       },
     },
   })
-  @UseInterceptors(FilesInterceptor('files', 10, { storage: memoryStorage() }))
-  uploadMedia(
-    @Param('id') id: string,
+  async uploadMedia(
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
-    @UploadedFiles() files: Express.Multer.File[],
+    @Req() req: FastifyRequest,
   ) {
-    if (!Array.isArray(files)) files = [files];
+    const files: Express.Multer.File[] = [];
+    for await (const part of req.parts()) {
+      if (part.type === 'file') {
+        const buffer = await part.toBuffer();
+        files.push({
+          fieldname: part.fieldname,
+          originalname: part.filename,
+          mimetype: part.mimetype,
+          buffer,
+          size: buffer.length,
+          encoding: part.encoding,
+        } as Express.Multer.File);
+      }
+    }
 
-    const pipe = new FileValidationPipe();
-    files.forEach((f) => pipe.transform(f));
+    if (!files.length) {
+      throw new BadRequestException('No files provided');
+    }
+
+    new FilesValidationPipe().transform(files);
 
     return this.farmsService.uploadMedia(id, user.sub, files);
   }

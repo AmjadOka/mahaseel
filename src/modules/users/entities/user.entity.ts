@@ -40,11 +40,11 @@ export class User {
   @Column({ name: 'full_name', length: 100, nullable: true, type: 'varchar' })
   fullName: string | null;
 
-  @Column({ name: 'profile_image', nullable: true })
-  profileImage: string;
+  @Column({ name: 'profile_image', nullable: true, type: 'varchar' })
+  profileImage: string | null;
 
-  @Column({ nullable: true })
-  avatarPublicId: string;
+  @Column({ nullable: true, type: 'varchar' })
+  avatarPublicId: string | null;
 
   /* =====================================================
       AUTH — LOCAL

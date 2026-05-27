@@ -3,7 +3,6 @@ import {
   Controller,
   Get,
   Post,
-  Put,
   Patch,
   Delete,
   Body,
@@ -11,12 +10,12 @@ import {
   Query,
   UseGuards,
   UseInterceptors,
-  UploadedFile,
   ParseUUIDPipe,
   ParseBoolPipe,
   BadRequestException,
   HttpCode,
   HttpStatus,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer'; // ← explicit memoryStorage
@@ -32,14 +31,14 @@ import {
 
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { AdminGuard } from 'src/common/guards/admin.guard';
-import { FileValidationPipe } from '../upload/validation.pipe';
 import { CategoriesService } from './categories.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { Roles } from 'src/common/decorators';
 import { Role } from 'src/common/enums/role.enum';
-
+import type { FastifyRequest } from 'fastify';
+import { FileValidationPipe } from '../upload/validation.pipe';
 @ApiTags('Categories')
 @Controller('categories')
 @UseGuards(JwtAuthGuard)
@@ -119,7 +118,7 @@ export class AdminCategoriesController {
 
   // ── Replace icon ───────────────────────────────────────────────────────────
 
-  @Put(':id/icon')
+  @Patch(':id/icon')
   @UseInterceptors(FileInterceptor('icon', { storage: memoryStorage() })) // ← memoryStorage
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: '[Admin] Upload or replace the category icon' })
@@ -130,16 +129,36 @@ export class AdminCategoriesController {
       properties: { icon: { type: 'string', format: 'binary' } },
     },
   })
-  updateIcon(
+  async updateIcon(
     @Param('id', ParseUUIDPipe) id: string,
-    @UploadedFile() icon: Express.Multer.File,
+    @Req() req: FastifyRequest,
   ) {
-    if (!icon) throw new BadRequestException('Icon file is required.');
-    const pipe = new FileValidationPipe(); // ← same pipe as products
-    pipe.transform(icon);
-    return this.service.updateIcon(id, icon);
-  }
+    let file: Express.Multer.File | null = null;
 
+    for await (const part of req.parts()) {
+      if (part.type === 'file' && !file) {
+        // take only the first file
+        const buffer = await part.toBuffer();
+        file = {
+          fieldname: part.fieldname,
+          originalname: part.filename,
+          mimetype: part.mimetype,
+          buffer,
+          size: buffer.length,
+          encoding: part.encoding,
+        } as Express.Multer.File;
+      }
+      // all other parts are drained by iterating past them
+    }
+
+    if (!file) {
+      throw new BadRequestException('No file provided');
+    }
+
+    new FileValidationPipe().transform(file); // validate file
+
+    return this.service.updateIcon(id, file); // single file ✓
+  }
   // ── Remove icon ────────────────────────────────────────────────────────────
 
   @Delete(':id/icon')

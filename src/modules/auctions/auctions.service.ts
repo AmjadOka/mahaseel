@@ -37,19 +37,6 @@ const AUCTION_LOCK_TTL_MS = 15_000;
 
 const LOCK_KEY = (productId: string) => `lock:auction:${productId}`;
 
-// modules/auctions/auctions.cache.ts
-
-const AUCTIONS_TTL = {
-  bidsForProduct: 60 * 2, // 2 min — merchant bid list, busted on every bid change
-  myBids: 60 * 2, // 2 min — buyer's active bids, busted on every bid change
-} as const;
-
-const AUCTIONS_CK = {
-  bidsForProduct: (productId: string) => `auctions:bids:product:${productId}`,
-  myBids: (buyerId: string) => `auctions:bids:buyer:${buyerId}`,
-} as const;
-// ─────────────────────────────────────────────────────────────────────────────
-
 @Injectable()
 export class AuctionsService {
   constructor(

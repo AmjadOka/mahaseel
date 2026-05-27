@@ -8,12 +8,11 @@ import {
   Param,
   Query,
   UseGuards,
-  UploadedFiles,
-  UseInterceptors,
   HttpCode,
   HttpStatus,
   ParseEnumPipe,
   BadRequestException,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 
 import {
@@ -23,8 +22,8 @@ import {
   ApiConsumes,
   ApiBody,
 } from '@nestjs/swagger';
-
-import { FilesInterceptor } from '@nestjs/platform-express';
+import { Req } from '@nestjs/common';
+import type { FastifyRequest } from 'fastify';
 
 import { ProductsService } from './products.service';
 
@@ -39,8 +38,7 @@ import { Role } from 'src/common/enums/role.enum';
 import { ProductStatus } from 'src/common/enums/product.enum';
 
 import type { AuthUser } from 'src/common/types';
-import { FileValidationPipe } from '../upload/validation.pipe';
-import { memoryStorage } from 'multer';
+import { FilesValidationPipe } from '../upload/validation.pipe';
 
 @ApiTags('products')
 @Controller('products')
@@ -82,7 +80,10 @@ export class ProductsController {
   @Get(':id')
   @Roles(Role.MERCHANT)
   @ApiOperation({ summary: 'Get product detail (merchant view)' })
-  findMerchantProduct(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  findMerchantProduct(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.productsService.findMerchantProduct(id, user.sub);
   }
 
@@ -90,7 +91,7 @@ export class ProductsController {
   @Roles(Role.MERCHANT)
   @ApiOperation({ summary: 'Update product' })
   update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
     @Body() dto: UpdateProductDto,
   ) {
@@ -101,7 +102,10 @@ export class ProductsController {
   @Roles(Role.MERCHANT)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Delete product' })
-  remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.productsService.softDelete(id, user.sub);
   }
 
@@ -114,7 +118,10 @@ export class ProductsController {
   @Patch(':id/relist')
   @Roles(Role.MERCHANT)
   @ApiOperation({ summary: 'Re-list a sold or expired product' })
-  relist(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  relist(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.productsService.relist(id, user.sub);
   }
 
@@ -124,36 +131,43 @@ export class ProductsController {
   |--------------------------------------------------------------------------
   */
 
-  @Post(':id/media')
+  @Patch(':id/media')
   @Roles(Role.MERCHANT)
-  @ApiOperation({ summary: 'Upload product images/videos (max 10)' })
   @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload product images/videos (max 10)' })
   @ApiBody({
     schema: {
       type: 'object',
       properties: {
-        files: {
-          type: 'array',
-          items: { type: 'string', format: 'binary' },
-        },
+        files: { type: 'array', items: { type: 'string', format: 'binary' } },
       },
     },
   })
-  @UseInterceptors(
-    FilesInterceptor('files', 10, { storage: memoryStorage() }), // ← memoryStorage: file.buffer populated, never disk
-  )
-  uploadMedia(
-    @Param('id') id: string,
+  async uploadMedia(
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
-    @UploadedFiles() files: Express.Multer.File[],
+    @Req() req: FastifyRequest,
   ) {
-    if (!files?.length) {
+    const files: Express.Multer.File[] = [];
+    for await (const part of req.parts()) {
+      if (part.type === 'file') {
+        const buffer = await part.toBuffer();
+        files.push({
+          fieldname: part.fieldname,
+          originalname: part.filename,
+          mimetype: part.mimetype,
+          buffer,
+          size: buffer.length,
+          encoding: part.encoding,
+        } as Express.Multer.File);
+      }
+    }
+
+    if (!files.length) {
       throw new BadRequestException('No files provided');
     }
 
-    // Validate each file individually (type + size) before hitting Cloudinary
-    const pipe = new FileValidationPipe();
-    files.forEach((f) => pipe.transform(f));
+    new FilesValidationPipe().transform(files);
 
     return this.productsService.uploadMedia(id, user.sub, files);
   }
@@ -163,7 +177,7 @@ export class ProductsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Delete a product media item' })
   deleteMedia(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Param('mediaId') mediaId: string,
     @CurrentUser() user: AuthUser,
   ) {

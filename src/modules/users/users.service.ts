@@ -183,7 +183,7 @@ export class UsersService {
 
     await this.repo.update(id, {
       profileImage: uploaded.url,
-      avatarPublicId: uploaded.publicId, // store for future replace/delete
+      avatarPublicId: uploaded.publicId,
     });
 
     await this.bustUser(id);
@@ -205,10 +205,13 @@ export class UsersService {
       await this.uploadService.delete(user.avatarPublicId);
     }
 
-    await this.repo.update(id, {
-      profileImage: undefined,
-      avatarPublicId: undefined,
-    });
+    // QueryBuilder guarantees nulls are written — repo.update() can skip them
+    await this.repo
+      .createQueryBuilder()
+      .update()
+      .set({ profileImage: null, avatarPublicId: null })
+      .where('id = :id', { id })
+      .execute();
 
     await this.bustUser(id);
 
