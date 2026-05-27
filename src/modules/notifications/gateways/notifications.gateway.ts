@@ -39,7 +39,6 @@ export class NotificationsGateway
     this.logger.log(`Client disconnected: ${client.id}`);
   }
 
-  /** Push an in-app notification to a specific user room */
   sendNotificationToUser(userId: string, payload: Record<string, any>) {
     this.server.to(`user:${userId}`).emit(SocketEvent.NOTIFICATION, payload);
   }

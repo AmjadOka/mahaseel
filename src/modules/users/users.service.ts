@@ -22,7 +22,7 @@ export interface UpdateProfileDto {
 
 export interface PublicProfile {
   id: string;
-  fullName: string;
+  fullName: string | null;
   profileImage: string | null;
   ratingAvg: number;
   ratingCount: number;

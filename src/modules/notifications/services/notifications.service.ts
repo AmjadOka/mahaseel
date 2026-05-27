@@ -3,7 +3,6 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, LessThan, Repository } from 'typeorm';
 
-import { FcmToken } from '../entities/fcm-token.entity';
 import { Notification } from '../entities/notification.entity';
 import {
   NotificationChannel,
@@ -11,30 +10,33 @@ import {
   NotificationType,
 } from 'src/common/enums/notification.enum';
 import { NotificationCreatedEvent } from '../events/notification-created.event';
-import { Platform } from 'src/common/enums/platform.enum';
 import { RedisService } from 'src/shared/redis/redis.service';
 import { NOTIFICATIONS_CK, NOTIFICATIONS_TTL } from '../notifications.cache';
+import { NOTIFICATION_CREATED } from '../listeners/notifications.listener';
 
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
+
   constructor(
     @InjectRepository(Notification)
     private readonly notificationRepo: Repository<Notification>,
-    @InjectRepository(FcmToken)
-    private readonly fcmTokenRepo: Repository<FcmToken>,
     private readonly emitter: EventEmitter2,
-    // private readonly redis = this.notificationRepo.manager.connection.redis;
     private readonly redis: RedisService,
   ) {}
 
-  // ─── Core notify ─────────────────────────────────────────────────────────────
+  // ─── Core notify ──────────────────────────────────────────────────────────
 
   /**
-   * The single entry point for all notifications across the app.
+   * Single entry point for all notifications across the app.
    *
-   * - Always defaults to [IN_APP, PUSH] channels unless overridden.
-   * - Uses emitAsync so the listener awaits dispatch before the caller continues.
+   * Emits a `notification.created` event which the listener picks up to:
+   *  - persist the row (via dispatcher)
+   *  - dispatch to each channel (IN_APP WebSocket, EMAIL, SMS)
+   *  - push SSE to open browser tabs
+   *  - bust the Redis unread cache
+   *
+   * Default channels: [IN_APP] — pass `channels` to add EMAIL or SMS.
    */
   async notify(
     userId: string,
@@ -67,14 +69,10 @@ export class NotificationsService {
       bodyAr: payload.bodyAr,
 
       priority: payload.priority ?? NotificationPriority.NORMAL,
-      channels: payload.channels ?? [
-        NotificationChannel.IN_APP,
-        NotificationChannel.PUSH,
-      ],
+      channels: payload.channels ?? [NotificationChannel.IN_APP],
 
       data: {
         ...(payload.data ?? {}),
-        // Reference fields passed in data so dispatcher can pick them up
         ...(payload.referenceType
           ? { referenceType: payload.referenceType }
           : {}),
@@ -82,23 +80,23 @@ export class NotificationsService {
       },
     });
 
-    await this.emitter.emitAsync('notification.created', event);
-    await this.bustUnread(userId);
+    await this.emitter.emitAsync(NOTIFICATION_CREATED, event);
 
     this.logger.debug(
-      `Notification dispatched [${payload.type}] to user ${userId}`,
+      `Notification emitted [${payload.type}] to user ${userId}`,
     );
   }
 
-  // ─── Typed convenience wrappers ───────────────────────────────────────────────
+  // ─── Typed convenience wrappers ───────────────────────────────────────────
   //
-  // These keep call sites clean without sprinkling raw type/title/body strings
-  // everywhere in other services. Add new ones here as the domain grows.
+  // Keep call sites clean — raw strings never leak into other services.
+  // Add new wrappers here as the domain grows.
 
   async notifyWithdrawalCompleted(params: {
     userId: string;
     amount: number;
     withdrawalId: string;
+    userEmail?: string;
   }): Promise<void> {
     await this.notify(params.userId, {
       type: NotificationType.WITHDRAWAL_COMPLETED,
@@ -108,7 +106,13 @@ export class NotificationsService {
       bodyAr: `تم تحويل ${params.amount} ريال بنجاح`,
       referenceType: 'withdrawal',
       referenceId: params.withdrawalId,
-      data: { amount: params.amount },
+      channels: params.userEmail
+        ? [NotificationChannel.IN_APP, NotificationChannel.EMAIL]
+        : [NotificationChannel.IN_APP],
+      data: {
+        amount: params.amount,
+        ...(params.userEmail ? { userEmail: params.userEmail } : {}),
+      },
     });
   }
 
@@ -150,7 +154,7 @@ export class NotificationsService {
     });
   }
 
-  // ─── Read / CRUD ──────────────────────────────────────────────────────────────
+  // ─── Read / CRUD ──────────────────────────────────────────────────────────
 
   async getAll(
     userId: string,
@@ -169,6 +173,7 @@ export class NotificationsService {
       skip: (page - 1) * limit,
       take: limit,
     });
+
     const result = { data, total };
     await this.redis.set(
       cacheKey,
@@ -222,7 +227,6 @@ export class NotificationsService {
     notification.readAt = new Date();
     const saved = await this.notificationRepo.save(notification);
     await this.bustUnread(userId);
-
     return saved;
   }
 
@@ -248,38 +252,8 @@ export class NotificationsService {
     );
   }
 
-  // ─── FCM Token Management ─────────────────────────────────────────────────────
+  // ─── Cache helpers ────────────────────────────────────────────────────────
 
-  async registerFcmToken(
-    userId: string,
-    token: string,
-    platform: Platform,
-  ): Promise<FcmToken> {
-    const existing = await this.fcmTokenRepo.findOne({
-      where: { userId, token },
-    });
-
-    if (existing) {
-      existing.isActive = true;
-      existing.platform = platform;
-      return this.fcmTokenRepo.save(existing);
-    }
-
-    return this.fcmTokenRepo.save(
-      this.fcmTokenRepo.create({ userId, token, platform }),
-    );
-  }
-
-  async removeFcmToken(userId: string, token: string): Promise<void> {
-    await this.fcmTokenRepo.update({ userId, token }, { isActive: false });
-  }
-
-  // ─── Cache helpers ────────────────────────────────────────────────────────────
-
-  /**
-   * Busts the unread list and unread count together.
-   * Called after: notify(), markAsRead(), markAllAsRead().
-   */
   private async bustUnread(userId: string): Promise<void> {
     await Promise.all([
       this.redis.del(NOTIFICATIONS_CK.unread(userId)),

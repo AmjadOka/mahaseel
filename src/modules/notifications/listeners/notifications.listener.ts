@@ -6,16 +6,12 @@ import { Repository } from 'typeorm';
 import { Notification } from '../entities/notification.entity';
 import { NotificationCreatedEvent } from '../events/notification-created.event';
 import { NotificationChannel } from 'src/common/enums/notification.enum';
+import { NotificationsDispatcher } from '../services/notifications-dispatcher.service';
 import { NotificationsSseService } from '../services/notifications-sse.service';
 import { RedisService } from 'src/shared/redis/redis.service';
-export const NOTIFICATION_CREATED = 'notification.created';
+import { NOTIFICATIONS_CK } from '../notifications.cache';
 
-// Mirror of the keys in NotificationsService — kept in sync manually.
-// Alternatively, export CK from notifications.service.ts and import it here.
-const CK = {
-  count: (userId: string) => `notifications:count:${userId}`,
-  unread: (userId: string) => `notifications:unread:${userId}`,
-};
+export const NOTIFICATION_CREATED = 'notification.created';
 
 @Injectable()
 export class NotificationCreatedListener {
@@ -24,44 +20,35 @@ export class NotificationCreatedListener {
   constructor(
     @InjectRepository(Notification)
     private readonly notificationRepo: Repository<Notification>,
+    private readonly dispatcher: NotificationsDispatcher,
     private readonly sseService: NotificationsSseService,
     private readonly redis: RedisService,
   ) {}
 
   /**
-   * Fires for every 'notification.created' event emitted by NotificationsService.notify().
+   * Single handler for every 'notification.created' event.
    *
-   * Responsibilities:
-   *  1. Persist the notification row to the DB (in-app bell).
-   *  2. Bust the Redis unread cache so the next poll sees fresh data.
-   *  3. Push a real-time SSE event to any open browser tabs.
+   * Responsibilities (in order):
+   *  1. Delegate to the dispatcher — persist + channel dispatch.
+   *  2. Bust the Redis unread cache (count + list).
+   *  3. Push an SSE event to any open browser tabs (IN_APP channel only).
    */
   @OnEvent(NOTIFICATION_CREATED, { async: true })
   async handle(event: NotificationCreatedEvent): Promise<void> {
-    // ── 1. Persist ──────────────────────────────────────────────────────────
-    await this.notificationRepo.save(
-      this.notificationRepo.create({
-        userId: event.userId,
-        type: event.type,
-        title: event.title,
-        body: event.body,
-        titleAr: event.titleAr,
-        bodyAr: event.bodyAr,
-        data: event.data,
-        isRead: false,
-      }),
-    );
+    // ── 1. Persist + channel dispatch ────────────────────────────────────────
+    // Dispatcher owns persistence — one save, guaranteed.
+    const notification = await this.dispatcher.dispatch(event);
 
-    // ── 2. Bust Redis unread cache ──────────────────────────────────────────
+    // ── 2. Bust Redis unread cache ────────────────────────────────────────────
     await Promise.all([
-      this.redis.del(CK.unread(event.userId)),
-      this.redis.del(CK.count(event.userId)),
+      this.redis.del(NOTIFICATIONS_CK.unread(event.userId)),
+      this.redis.del(NOTIFICATIONS_CK.count(event.userId)),
     ]);
 
-    // ── 3. Push SSE (only for IN_APP channel) ───────────────────────────────
+    // ── 3. Push SSE (IN_APP channel only) ─────────────────────────────────────
     if (!event.channels.includes(NotificationChannel.IN_APP)) return;
 
-    // Fresh count from DB since we just busted the cache
+    // Fresh unread count from DB — cache was just busted above
     const count = await this.notificationRepo.count({
       where: { userId: event.userId, isRead: false },
     });
@@ -69,16 +56,16 @@ export class NotificationCreatedListener {
     this.sseService.push(event.userId, {
       count,
       type: event.type,
-      title: event.title,
-      body: event.body,
-      titleAr: event.titleAr,
-      bodyAr: event.bodyAr,
-      referenceType: event.data?.referenceType,
-      referenceId: event.data?.referenceId,
+      title: notification.title,
+      body: notification.body,
+      titleAr: notification.titleAr,
+      bodyAr: notification.bodyAr,
+      referenceType: notification.referenceType,
+      referenceId: notification.referenceId,
     });
 
     this.logger.debug(
-      `Notification persisted + SSE pushed [userId=${event.userId}] type=${event.type}`,
+      `SSE pushed [userId=${event.userId}] type=${event.type} unread=${count}`,
     );
   }
 }

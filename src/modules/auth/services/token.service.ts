@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import { v4 as uuid } from 'uuid';
+import ms from 'ms';
 
 @Injectable()
 export class TokenService {
@@ -32,7 +33,9 @@ export class TokenService {
         },
         {
           secret: this.config.getOrThrow<string>('jwt.accessSecret'),
-          expiresIn: '1d',
+          expiresIn: this.config.getOrThrow<string>(
+            'jwt.accessExpires',
+          ) as ms.StringValue,
         },
       ),
       this.jwtService.signAsync(
@@ -46,7 +49,9 @@ export class TokenService {
         },
         {
           secret: this.config.getOrThrow<string>('jwt.refreshSecret'),
-          expiresIn: '30d',
+          expiresIn: this.config.getOrThrow<string>(
+            'jwt.refreshExpires',
+          ) as ms.StringValue,
         },
       ),
     ]);

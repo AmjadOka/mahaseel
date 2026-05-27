@@ -2,13 +2,10 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { Notification } from './entities/notification.entity';
-import { FcmToken } from './entities/fcm-token.entity';
 
 import { NotificationsController } from './notifications.controller';
 import { NotificationCreatedListener } from './listeners/notifications.listener';
 import { NotificationsGateway } from './gateways/notifications.gateway';
-import { FcmProvider } from './providers/fcm.provider';
-import { MailProvider } from './providers/mail.provider';
 import { NotificationsService } from './services/notifications.service';
 import { NotificationsDispatcher } from './services/notifications-dispatcher.service';
 import { NotificationsProcessor } from './notifications.processor';
@@ -19,10 +16,8 @@ import { NotificationsSseService } from './services/notifications-sse.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Notification, FcmToken]),
-    BullModule.registerQueue({
-      name: NOTIFICATIONS_QUEUE,
-    }),
+    TypeOrmModule.forFeature([Notification]),
+    BullModule.registerQueue({ name: NOTIFICATIONS_QUEUE }),
   ],
   controllers: [NotificationsController],
   providers: [
@@ -33,8 +28,6 @@ import { NotificationsSseService } from './services/notifications-sse.service';
     NotificationCreatedListener,
     NotificationsSseService,
     NotificationsGateway,
-    FcmProvider,
-    MailProvider,
   ],
   exports: [NotificationsService],
 })

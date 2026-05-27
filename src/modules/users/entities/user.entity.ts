@@ -16,9 +16,7 @@ import { Farm } from '../../farms/entities/farm.entity';
 import { Order } from '../../orders/entities/order.entity';
 import { Rating } from '../../ratings/entities/rating.entity';
 import { Wallet } from '../../wallet/entities/wallet.entity';
-
 import { Notification } from '../../notifications/entities/notification.entity';
-import { FcmToken } from 'src/modules/notifications/entities/fcm-token.entity';
 import { BankAccount } from 'src/modules/bank-account/entities/bank-account.entity';
 
 @Entity('users')
@@ -30,50 +28,31 @@ export class User {
       BASIC INFO
   ===================================================== */
 
-  @Column({
-    type: 'enum',
-    enum: Role,
-    default: Role.BUYER,
-  })
+  @Column({ type: 'enum', enum: Role, default: Role.BUYER })
   role: Role;
 
-  @Column({
-    unique: true,
-    length: 100,
-  })
+  @Column({ unique: true, length: 100 })
   email: string;
 
-  @Column({
-    unique: true,
-    length: 20,
-  })
-  phone: string;
+  @Column({ unique: true, length: 20, nullable: true, type: 'varchar' })
+  phone: string | null;
 
-  @Column({
-    name: 'full_name',
-    length: 100,
-  })
-  fullName: string;
+  @Column({ name: 'full_name', length: 100, nullable: true, type: 'varchar' })
+  fullName: string | null;
 
-  @Column({
-    name: 'profile_image',
-    nullable: true,
-  })
+  @Column({ name: 'profile_image', nullable: true })
   profileImage: string;
 
   @Column({ nullable: true })
   avatarPublicId: string;
 
   /* =====================================================
-      AUTH
+      AUTH — LOCAL
   ===================================================== */
 
-  @Column({
-    select: false,
-    nullable: true,
-  })
+  @Column({ select: false, nullable: true, type: 'varchar' })
   @Exclude()
-  password: string;
+  password: string | null;
 
   @Column({
     name: 'refresh_token_hash',
@@ -86,6 +65,45 @@ export class User {
 
   @Column({ default: 0 })
   tokenVersion: number;
+
+  /* =====================================================
+      AUTH — OAUTH
+  ===================================================== */
+
+  /**
+   * Populated when the user signs in via Google OAuth.
+   * Null for email/password-only accounts.
+   */
+  @Column({ name: 'google_id', nullable: true, unique: true, type: 'text' })
+  googleId: string | null;
+
+  /* =====================================================
+      EMAIL VERIFICATION
+  ===================================================== */
+
+  /**
+   * 6-digit code e-mailed on sign-up.
+   * Cleared once the account is activated.
+   */
+  @Column({
+    name: 'email_verification_code',
+    type: 'varchar',
+    length: 6,
+    nullable: true,
+    select: false,
+  })
+  @Exclude()
+  emailVerificationCode: string | null;
+
+  @Column({
+    name: 'email_verification_expires',
+    type: 'timestamp',
+    nullable: true,
+    select: false,
+  })
+  @Exclude()
+  emailVerificationExpires: Date | null;
+
   /* =====================================================
       PASSWORD RESET
   ===================================================== */
@@ -109,19 +127,11 @@ export class User {
   @Exclude()
   resetExpires: Date | null;
 
-  @Column({
-    name: 'reset_attempts',
-    default: 0,
-    select: false,
-  })
+  @Column({ name: 'reset_attempts', default: 0, select: false })
   @Exclude()
   resetAttempts: number;
 
-  @Column({
-    name: 'is_reset_verified',
-    default: false,
-    select: false,
-  })
+  @Column({ name: 'is_reset_verified', default: false, select: false })
   @Exclude()
   isResetVerified: boolean;
 
@@ -129,23 +139,16 @@ export class User {
       ACCOUNT STATUS
   ===================================================== */
 
-  @Column({
-    name: 'is_active',
-    default: true,
-  })
+  /**
+   * false until the user verifies their email (or signs in via OAuth).
+   */
+  @Column({ name: 'is_active', default: false })
   isActive: boolean;
 
-  @Column({
-    name: 'is_verified',
-    default: false,
-  })
+  @Column({ name: 'is_verified', default: false })
   isVerified: boolean;
 
-  @Column({
-    name: 'is_deleted',
-    default: false,
-    select: false,
-  })
+  @Column({ name: 'is_deleted', default: false, select: false })
   @Exclude()
   isDeleted: boolean;
 
@@ -171,24 +174,17 @@ export class User {
   })
   ratingAvg: number;
 
-  @Column({
-    name: 'rating_count',
-    default: 0,
-  })
+  @Column({ name: 'rating_count', default: 0 })
   ratingCount: number;
 
   /* =====================================================
       TIMESTAMPS
   ===================================================== */
 
-  @CreateDateColumn({
-    name: 'created_at',
-  })
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @UpdateDateColumn({
-    name: 'updated_at',
-  })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
   /* =====================================================
@@ -215,9 +211,6 @@ export class User {
 
   @OneToMany(() => Notification, (n) => n.user)
   notifications: Notification[];
-
-  @OneToMany(() => FcmToken, (t) => t.user)
-  fcmTokens: FcmToken[];
 
   @OneToMany(() => BankAccount, (account) => account.user)
   bankAccounts: BankAccount[];

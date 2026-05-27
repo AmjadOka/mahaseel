@@ -4,8 +4,8 @@ import { finalize } from 'rxjs/operators';
 import { MessageEvent } from '@nestjs/common';
 
 export interface NotificationSsePayload {
-  count: number; // updated unread count — drives the bell badge
-  type: string; // notification type — lets the client show a toast
+  count: number;
+  type: string;
   title: string;
   body: string;
   titleAr?: string;
@@ -25,18 +25,13 @@ export class NotificationsSseService {
   private readonly subjects = new Map<string, Subject<MessageEvent>>();
 
   /**
-   * Track how many open connections exist per user so we only clean up
-   * the Subject when the last tab disconnects.
+   * Track open connection count per user so we clean up the Subject
+   * only when the last tab disconnects.
    */
   private readonly refCount = new Map<string, number>();
 
   // ── Connect ───────────────────────────────────────────────────────────────
 
-  /**
-   * Called by the SSE controller endpoint.
-   * Returns an Observable the controller streams to the client.
-   * Automatically cleans up when the client disconnects.
-   */
   connect(userId: string): Observable<MessageEvent> {
     if (!this.subjects.has(userId)) {
       this.subjects.set(userId, new Subject<MessageEvent>());
@@ -56,10 +51,6 @@ export class NotificationsSseService {
 
   // ── Push ──────────────────────────────────────────────────────────────────
 
-  /**
-   * Pushes a notification event to all open tabs for a user.
-   * No-op if the user has no active SSE connection (they'll see it on next load).
-   */
   push(userId: string, payload: NotificationSsePayload): void {
     const subject = this.subjects.get(userId);
     if (!subject) return;
@@ -74,7 +65,6 @@ export class NotificationsSseService {
     const remaining = (this.refCount.get(userId) ?? 1) - 1;
 
     if (remaining <= 0) {
-      // Last tab closed — clean up the Subject entirely
       this.subjects.get(userId)?.complete();
       this.subjects.delete(userId);
       this.refCount.delete(userId);

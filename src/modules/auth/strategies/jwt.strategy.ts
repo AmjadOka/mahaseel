@@ -4,9 +4,9 @@ import { ExtractJwt, Strategy, StrategyOptions } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { JwtPayload } from './interfaces/jwt-payload.interface';
-import { User } from '../../modules/users/entities/user.entity';
-import { RedisService } from '../../shared/redis/redis.service';
+import { JwtPayload } from '../interfaces/jwt-payload.interface';
+import { User } from 'src/modules/users/entities/user.entity';
+import { RedisService } from 'src/shared/redis/redis.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -54,7 +54,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const cachedUser = await this.redisService.get(cacheKey);
 
     if (cachedUser) {
-      const user = JSON.parse(cachedUser);
+      const user = JSON.parse(cachedUser) as JwtPayload;
 
       if (user.tokenVersion !== payload.tokenVersion) {
         throw new UnauthorizedException('Session expired');

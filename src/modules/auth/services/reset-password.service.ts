@@ -10,6 +10,9 @@ import * as crypto from 'crypto';
 
 import { User } from '../../users/entities/user.entity';
 import { PasswordService } from './password.service';
+import { MailProvider } from 'src/shared/mail/mail.provider';
+import { EmailTemplate } from 'src/common/enums/email.enum';
+import { ChangePasswordDto } from '../dto/change-password.dto';
 
 @Injectable()
 export class ResetPasswordService {
@@ -21,6 +24,7 @@ export class ResetPasswordService {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     private readonly passwordService: PasswordService,
+    private readonly mail: MailProvider,
   ) {}
 
   /* =====================================================
@@ -48,7 +52,12 @@ export class ResetPasswordService {
 
     await this.usersRepository.save(user);
 
-    // TODO: send email with code here
+    void this.mail.send({
+      to: user.email,
+      template: EmailTemplate.PASSWORD_RESET,
+      subject: 'Reset your Mahaseel password',
+      context: { code },
+    });
 
     return { message: 'If the email exists, a reset code was sent.' };
   }
@@ -69,9 +78,7 @@ export class ResetPasswordService {
       .where('user.email = :email', { email })
       .getOne();
 
-    if (!user) {
-      throw new BadRequestException('Invalid or expired code');
-    }
+    if (!user) throw new BadRequestException('Invalid or expired code');
 
     if (!user.resetExpires || user.resetExpires < new Date()) {
       throw new BadRequestException('Code expired');
@@ -83,16 +90,16 @@ export class ResetPasswordService {
 
     if (user.resetCode !== code) {
       user.resetAttempts += 1;
-      await this.usersRepository.save(user); // FIX: removed duplicate save
+      await this.usersRepository.save(user);
       throw new BadRequestException('Invalid reset code');
     }
 
-    // Code is valid — open the 15-minute window to set a new password
+    // Open the 15-minute window to set a new password
     user.isResetVerified = true;
-    user.resetExpires = new Date(Date.now() + this.VERIFIED_TTL_MS); // FIX: this is reused as the verified window
+    user.resetExpires = new Date(Date.now() + this.VERIFIED_TTL_MS);
     user.resetAttempts = 0;
 
-    await this.usersRepository.save(user); // FIX: was saved twice identically
+    await this.usersRepository.save(user);
 
     return { message: 'Code verified successfully' };
   }
@@ -101,33 +108,26 @@ export class ResetPasswordService {
       CHANGE PASSWORD
   ===================================================== */
 
-  async changePassword(email: string, newPassword: string) {
+  async changePassword(changePasswordDto: ChangePasswordDto) {
     const user = await this.usersRepository
       .createQueryBuilder('user')
-      .addSelect([
-        'user.password',
-        'user.isResetVerified',
-        'user.resetExpires', // FIX: was checking non-existent resetVerifiedExpires
-      ])
-      .where('user.email = :email', { email })
+      .addSelect(['user.password', 'user.isResetVerified', 'user.resetExpires'])
+      .where('user.email = :email', { email: changePasswordDto.email })
       .getOne();
 
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+    if (!user) throw new NotFoundException('User not found');
 
     if (!user.isResetVerified) {
       throw new BadRequestException('Reset code not verified');
     }
 
-    // resetExpires is repurposed as the post-verification window in verifyResetCode
     if (!user.resetExpires || user.resetExpires < new Date()) {
       throw new BadRequestException('Reset verification expired');
     }
 
-    user.password = await this.passwordService.hash(newPassword);
-
-    // Invalidate all sessions and clear reset state
+    user.password = await this.passwordService.hash(
+      changePasswordDto.newPassword,
+    );
     user.refreshTokenHash = null;
     user.resetCode = null;
     user.resetExpires = null;

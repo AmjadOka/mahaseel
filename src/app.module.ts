@@ -6,9 +6,8 @@ import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
 import jwtConfig from './config/jwt.config';
 import redisConfig from './config/redis.config';
-import storageConfig from './config/storage.config';
+import googleConfig from './config/google.config';
 
-//import { StorageModule } from './shared/storage/storage.module';
 import { RedisModule } from './shared/redis/redis.module';
 import { BullModule } from '@nestjs/bullmq';
 
@@ -33,7 +32,7 @@ import { BankAccountModule } from './modules/bank-account/bank-account.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, databaseConfig, jwtConfig, redisConfig, storageConfig],
+      load: [appConfig, databaseConfig, jwtConfig, redisConfig, googleConfig],
       envFilePath: '.env',
     }),
 
@@ -55,6 +54,7 @@ import { BankAccountModule } from './modules/bank-account/bank-account.module';
 
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
+
       useFactory: (config: ConfigService) => ({
         throttlers: [
           {

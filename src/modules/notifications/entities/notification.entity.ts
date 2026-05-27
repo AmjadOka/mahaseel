@@ -67,9 +67,7 @@ export class Notification {
   @Column({ type: 'timestamp', nullable: true })
   readAt?: Date;
 
-  @Column({ default: false })
-  pushEnabled: boolean;
-
+  /** Marked true after the email channel fires successfully */
   @Column({ default: false })
   emailed: boolean;
 
