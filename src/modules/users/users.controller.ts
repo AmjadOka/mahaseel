@@ -120,13 +120,11 @@ export class UsersController {
   }
 
   /**
-   * DELETE /users/me
-   * Soft-deletes the authenticated user's account.
+   * POST /users/me/promote-to-merchant
+   */
   @UseGuards(JwtAuthGuard)
-  @Delete('me')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  softDelete(@CurrentUser('id') id: string) {
-    return this.usersService.softDelete(id);
+  @Patch('me/promote-to-merchant')
+  promoteToMerchant(@CurrentUser('id') id: string) {
+    return this.usersService.requestPromoteToMerchant(id);
   }
-       */
 }

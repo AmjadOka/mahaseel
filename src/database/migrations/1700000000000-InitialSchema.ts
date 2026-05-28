@@ -199,7 +199,7 @@ export class InitialSchema1700000000000 implements MigrationInterface {
         "amount" DECIMAL(12,2) NOT NULL,
         "currency" VARCHAR DEFAULT 'SAR',
         "status" "payment_status_enum" NOT NULL DEFAULT 'pending',
-        "payment_gateway" VARCHAR DEFAULT 'moyasar',
+        "payment_gateway" VARCHAR DEFAULT 'stripe',
         "gateway_ref" VARCHAR,
         "gateway_url" VARCHAR,
         "paid_at" TIMESTAMP,

@@ -31,7 +31,7 @@ export class Payment {
   @Column({ type: 'enum', enum: PaymentStatus, default: PaymentStatus.PENDING })
   status: PaymentStatus;
 
-  @Column({ name: 'payment_gateway', default: 'moyasar' })
+  @Column({ name: 'payment_gateway', default: 'stripe' })
   paymentGateway: string;
 
   @Column({ name: 'gateway_ref', nullable: true })

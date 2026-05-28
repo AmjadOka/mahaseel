@@ -18,6 +18,7 @@ import { Rating } from '../../ratings/entities/rating.entity';
 import { Wallet } from '../../wallet/entities/wallet.entity';
 import { Notification } from '../../notifications/entities/notification.entity';
 import { BankAccount } from 'src/modules/bank-account/entities/bank-account.entity';
+import { PromotionStatus } from 'src/common/enums/promotionStatus';
 
 @Entity('users')
 export class User {
@@ -186,6 +187,18 @@ export class User {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  /* =====================================================
+      PROMOTION STATUS
+  ===================================================== */
+
+  @Column({
+    name: 'promotion_status',
+    type: 'enum',
+    enum: PromotionStatus,
+    default: PromotionStatus.NONE,
+  })
+  promotionStatus: PromotionStatus;
 
   /* =====================================================
       RELATIONS

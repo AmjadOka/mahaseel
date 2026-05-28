@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   Logger,
+  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -11,6 +12,9 @@ import { User } from './entities/user.entity';
 import { Role } from 'src/common/enums/role.enum';
 import { UploadService } from '../upload/upload.service';
 import { RedisService } from 'src/shared/redis/redis.service';
+import { PromotionStatus } from 'src/common/enums/promotionStatus';
+import { NotificationsService } from '../notifications/services/notifications.service';
+import { NotificationType } from 'src/common/enums/notification.enum';
 // import { StorageService } from '../../shared/storage/storage.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -62,6 +66,7 @@ export class UsersService {
     @InjectRepository(User) private readonly repo: Repository<User>,
     private readonly uploadService: UploadService,
     private readonly redis: RedisService,
+    private readonly notificationService: NotificationsService,
   ) {}
 
   // ── Queries ────────────────────────────────────────────────────────────────
@@ -218,23 +223,62 @@ export class UsersService {
     return this.findById(id);
   }
 
-  /**
-   * Soft-deletes a user.
-   * Marks deleted, inactive, and stamps deletedAt.
-   * Hard deletes are intentionally not exposed — use DB-level admin tools.
-  async softDelete(id: string): Promise<void> {
-    await this.findById(id);
+  // ─── Request Promote to Merchant ────────────────────────────────────────────
 
-    await this.repo.update(id, {
-      isDeleted: true,
-      deletedAt: new Date(),
-      isActive: false,
+  /**
+   * Allows a BUYER to request promotion to MERCHANT.
+   * Sets promotionStatus = PENDING so an admin can approve/reject later.
+   *
+   * Guards:
+   *  - User must exist and be active
+   *  - User must currently be a BUYER (not already a MERCHANT / ADMIN)
+   *  - No duplicate pending request
+   */
+
+  async requestPromoteToMerchant(userId: string): Promise<{ message: string }> {
+    const user = await this.repo.findOne({ where: { id: userId } });
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    if (!user.isActive) {
+      throw new BadRequestException(
+        'Your account must be active before requesting promotion.',
+      );
+    }
+
+    if (user.role !== Role.BUYER) {
+      throw new BadRequestException(
+        'Only buyers can request promotion to merchant.',
+      );
+    }
+
+    if (user.promotionStatus === PromotionStatus.PENDING) {
+      throw new ConflictException(
+        'You already have a pending promotion request.',
+      );
+    }
+
+    if (user.promotionStatus === PromotionStatus.APPROVED) {
+      throw new ConflictException('Your promotion has already been approved.');
+    }
+
+    await this.repo.update(userId, {
+      promotionStatus: PromotionStatus.PENDING,
     });
 
-    this.logger.log(`User soft-deleted [id=${id}]`);
+    await this.notificationService.notify(userId, {
+      type: NotificationType.ACCOUNT_PROMOTING_PENDING,
+      title: 'PROMOTING REQUEST UNDER REVIEW',
+      body: `WE RECEIVED YOUR REQUEST FOR MERCHANT UPGRADE WE WILL TOUCH YOU SOON`,
+      titleAr: 'طلبك قيد المراجعة',
+      bodyAr: 'طلبك قيد المراجعة سوف نقوم بالرد عليك قريبا',
+      referenceType: 'farm',
+      referenceId: user.id,
+    });
+    return { message: 'Promotion request submitted. Pending admin approval.' };
   }
-       */
-  // ── Cache helpers ──────────────────────────────────────────────────────────
 
   /**
    * Busts both the internal user row and the public profile in one shot.

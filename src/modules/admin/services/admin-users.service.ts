@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -12,9 +13,13 @@ import { NotificationsService } from '../../notifications/services/notifications
 import { AdminAuditService } from './admin-audit.service';
 
 import { Role } from 'src/common/enums/role.enum';
-import { NotificationType } from 'src/common/enums/notification.enum';
+import {
+  NotificationChannel,
+  NotificationType,
+} from 'src/common/enums/notification.enum';
 import { PaginationDto } from '../../../common/dto/pagination.dto';
 import { paginate } from '../../../shared/pagination/pagination.helper';
+import { PromotionStatus } from 'src/common/enums/promotionStatus';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +132,32 @@ export class AdminUsersService {
 
     return base;
   }
+  async getPendingMerchantsRoleRequests(): Promise<User[]> {
+    const pending = await this.usersRepo.find({
+      where: {
+        promotionStatus: PromotionStatus.PENDING,
+      },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        phone: true,
+        profileImage: true,
+        role: true,
+        promotionStatus: true,
+        isActive: true,
+        isVerified: true,
+        ratingAvg: true,
+        ratingCount: true,
+        createdAt: true,
+      },
+      order: {
+        createdAt: 'ASC',
+      },
+    });
+
+    return pending;
+  }
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
@@ -192,6 +223,93 @@ export class AdminUsersService {
     });
 
     return { message: `User ${user.phone} reinstated`, userId: id };
+  }
+
+  async approvePromotion(
+    userId: string,
+    adminId: string,
+  ): Promise<{ message: string }> {
+    const user = await this.findOrFail(userId);
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    if (user.promotionStatus !== PromotionStatus.PENDING) {
+      throw new BadRequestException(
+        'No pending promotion request for this user.',
+      );
+    }
+
+    await this.usersRepo.update(userId, {
+      role: Role.MERCHANT,
+      promotionStatus: PromotionStatus.APPROVED,
+    });
+
+    this.logger.log(`User made merchant [id=${userId}] by admin [${adminId}]`);
+
+    await this.auditService.log({
+      adminId,
+      action: 'MAKE_MERCHANT',
+      resourceType: 'user',
+      resourceId: userId,
+      meta: { userPhone: user.phone },
+    });
+
+    await this.notificationsService.notify(userId, {
+      type: NotificationType.ACCOUNT_PROMOTED,
+      title: 'upgrade to merchant successfully',
+      body: `${user.fullName} you have been promoted to merchant`,
+      titleAr: 'تم الترقية',
+      bodyAr: `"${user.fullName}" لقد تم ترقية حسابك الى تاجر`,
+      referenceType: 'farm',
+      referenceId: user.id,
+      channels: [NotificationChannel.IN_APP, NotificationChannel.EMAIL],
+    });
+    return { message: `User ${user.fullName} made merchant , id : ${userId}` };
+  }
+
+  async rejectPromotion(
+    userId: string,
+    adminId: string,
+    notes?: string,
+  ): Promise<{ message: string }> {
+    const user = await this.findOrFail(userId);
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    if (user.promotionStatus !== PromotionStatus.PENDING) {
+      throw new BadRequestException(
+        'No pending promotion request for this user.',
+      );
+    }
+
+    await this.usersRepo.update(userId, {
+      promotionStatus: PromotionStatus.REJECTED,
+    });
+
+    this.logger.log(`rejected merchant [id=${userId}] by admin [${adminId}]`);
+
+    await this.auditService.log({
+      adminId,
+      action: 'REJECT_MERCHANT',
+      resourceType: 'user',
+      resourceId: userId,
+      meta: { userPhone: user.phone },
+    });
+
+    await this.notificationsService.notify(userId, {
+      type: NotificationType.ACCOUNT_REJECT_PROMOTING,
+      title: 'upgrade to merchant has been rejected',
+      body: `${user.fullName} your request has been rejected ${notes}`,
+      titleAr: 'تم رفض الترقية',
+      bodyAr: `"${user.fullName}" لقد تم رفض ترقية حسابك الى تاجر ${notes}`,
+      referenceType: 'farm',
+      referenceId: user.id,
+    });
+    return { message: 'Promotion request has been rejected.' };
   }
 
   // ── Helper ─────────────────────────────────────────────────────────────────

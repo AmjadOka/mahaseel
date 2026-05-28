@@ -44,6 +44,10 @@ export enum NotificationType {
   //user
   ACCOUNT_SUSPENDED = 'account_suspended',
   ACCOUNT_REINSTATED = 'account_reinstated',
+
+  ACCOUNT_PROMOTING_PENDING = 'account_promoting_pending',
+  ACCOUNT_PROMOTED = 'account_promoted',
+  ACCOUNT_REJECT_PROMOTING = 'account_reject_promoting',
 }
 
 export enum NotificationChannel {

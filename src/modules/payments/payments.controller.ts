@@ -49,7 +49,8 @@ export class PaymentsController {
   @Post('orders/:orderId/initiate')
   @Roles(Role.BUYER)
   @ApiOperation({
-    summary: 'Initiate payment for accepted order (redirects to Moyasar)',
+    summary:
+      'Initiate payment for accepted order (redirects to stripe checkout)',
   })
   initiatePayment(
     @Param('orderId') orderId: string,

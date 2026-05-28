@@ -63,6 +63,18 @@ export class AdminUsersController {
     return this.usersService.getUser(id);
   }
 
+  @Get('pending-merchants')
+  @ApiOperation({
+    summary: '[Admin] List users with pending merchant role requests',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated user list',
+  })
+  getPendingMerchantsRoleRequests() {
+    return this.usersService.getPendingMerchantsRoleRequests();
+  }
+
   @Put(':id/suspend')
   @ApiOperation({ summary: '[Admin] Suspend user account — notifies user' })
   @ApiResponse({ status: 409, description: 'Already suspended or is an admin' })
@@ -85,5 +97,30 @@ export class AdminUsersController {
     @CurrentUser() admin: AuthUser,
   ) {
     return this.usersService.reinstateUser(id, { adminId: admin.sub });
+  }
+
+  @Put(':id/make-merchant')
+  @ApiOperation({
+    summary: '[Admin] Promote user to merchant role — notifies user',
+  })
+  @ApiResponse({ status: 409, description: 'User is already a merchant' })
+  approveMerchant(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() admin: AuthUser,
+  ) {
+    return this.usersService.approvePromotion(id, admin.sub);
+  }
+
+  @Put(':id/reject-merchant')
+  @ApiOperation({
+    summary: '[Admin] Reject user merchant role request — notifies user',
+  })
+  @ApiResponse({ status: 409, description: 'User is not a merchant' })
+  rejectMerchant(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() admin: AuthUser,
+    @Body() notes?: string,
+  ) {
+    return this.usersService.rejectPromotion(id, admin.sub, notes);
   }
 }
