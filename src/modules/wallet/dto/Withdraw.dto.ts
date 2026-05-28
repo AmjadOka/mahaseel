@@ -12,7 +12,7 @@ export class WithdrawDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()
-  bankAccountId?: string;
+  bankAccountId: string;
 
   @ApiPropertyOptional()
   @IsOptional()

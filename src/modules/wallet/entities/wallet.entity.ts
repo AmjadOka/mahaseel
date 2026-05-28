@@ -100,6 +100,9 @@ export class WalletTransaction {
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
+  @Column({ name: 'bank_account_id', nullable: true, type: 'uuid' })
+  bankAccountId: string | null;
+
   @ManyToOne(() => Wallet, (w) => w.transactions)
   @JoinColumn({ name: 'wallet_id' })
   wallet: Wallet;

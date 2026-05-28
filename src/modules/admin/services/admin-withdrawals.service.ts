@@ -35,7 +35,8 @@ export interface WithdrawalStats {
 export interface ProcessPayload {
   adminId: string;
   action: 'complete' | 'reject';
-  adminNotes?: string;
+  adminNotes: string;
+  userEmail?: string;
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -170,10 +171,34 @@ export class AdminWithdrawalsService {
       id,
       payload.action,
       payload.adminNotes,
+      payload.userEmail,
     );
 
     this.logger.log(
       `Withdrawal [id=${id}] ${payload.action}d by admin [${payload.adminId}]` +
+        (payload.adminNotes ? ` — notes: ${payload.adminNotes}` : ''),
+    );
+
+    return result;
+  }
+
+  async rejectWithdrawl(id: string, payload: ProcessPayload) {
+    const withdrawal = await this.getWithdrawal(id);
+
+    if (withdrawal.status !== WithdrawalStatus.PENDING) {
+      throw new BadRequestException(
+        `Withdrawal is already ${withdrawal.status} and cannot be processed again.`,
+      );
+    }
+
+    const result = await this.walletService.rejectWithdrawal(
+      id,
+      payload.adminNotes,
+      payload.userEmail,
+    );
+
+    this.logger.log(
+      `Withdrawal  [id=${id}] ${payload.action}d by admin [${payload.adminId}]` +
         (payload.adminNotes ? ` — notes: ${payload.adminNotes}` : ''),
     );
 

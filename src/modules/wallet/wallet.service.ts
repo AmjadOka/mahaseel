@@ -26,6 +26,7 @@ import {
   WalletTransactionType,
 } from 'src/common/enums/wallet.enum';
 import { WithdrawalStatus } from 'src/common/enums/withdrawal.enum';
+import { BankAccount } from '../bank-account/entities/bank-account.entity';
 
 @Injectable()
 export class WalletService {
@@ -38,6 +39,9 @@ export class WalletService {
 
     @InjectRepository(WithdrawalRequest)
     private readonly withdrawalsRepo: Repository<WithdrawalRequest>,
+
+    @InjectRepository(BankAccount)
+    private readonly bankAccountsRepo: Repository<BankAccount>,
 
     private readonly dataSource: DataSource,
 
@@ -153,6 +157,22 @@ export class WalletService {
     merchantId: string,
     dto: WithdrawDto,
   ): Promise<WithdrawalRequest> {
+    // ── 1. Validate bank account BEFORE opening a transaction ──────────────
+    const bankAccount = await this.bankAccountsRepo.findOne({
+      where: {
+        id: dto.bankAccountId,
+        userId: merchantId,
+        isActive: true,
+      },
+    });
+
+    if (!bankAccount) {
+      throw new NotFoundException(
+        'Bank account not found or does not belong to this merchant',
+      );
+    }
+
+    // ── 2. Financial updates inside a serialisable transaction ─────────────
     let savedWithdrawal!: WithdrawalRequest;
 
     await this.dataSource.transaction(async (manager) => {
@@ -170,7 +190,6 @@ export class WalletService {
       }
 
       wallet.availableBalance = Number(wallet.availableBalance) - dto.amount;
-
       await manager.save(wallet);
 
       const withdrawal = manager.create(WithdrawalRequest, {
@@ -183,6 +202,7 @@ export class WalletService {
 
       savedWithdrawal = await manager.save(withdrawal);
 
+      // Record the debit and link it to the chosen bank account
       await manager.save(WalletTransaction, {
         walletId: wallet.id,
         merchantId,
@@ -192,10 +212,12 @@ export class WalletService {
         balanceAfter: wallet.availableBalance,
         referenceType: 'withdrawal',
         referenceId: savedWithdrawal.id,
-        notes: 'Pending withdrawal request',
+        bankAccountId: dto.bankAccountId,
+        notes: `Withdrawal to ${bankAccount.bankName} ****${bankAccount.accountNumber.slice(-4)}`,
       });
     });
 
+    // ── 3. Notification outside the transaction (failure must not roll back) ─
     await this.notificationsService.notifyWithdrawalRequested({
       userId: merchantId,
       amount: dto.amount,
@@ -204,7 +226,6 @@ export class WalletService {
 
     return savedWithdrawal;
   }
-
   async getWithdrawals(merchantId: string): Promise<WithdrawalRequest[]> {
     return this.withdrawalsRepo.find({
       where: { merchantId },
@@ -216,8 +237,13 @@ export class WalletService {
     requestId: string,
     action?: 'complete' | 'reject',
     notes?: string,
+    userEmail?: string,
   ): Promise<void> {
     let completedRequest!: WithdrawalRequest;
+
+    if (action === 'reject') {
+      throw new BadRequestException('Use rejectWithdrawal()');
+    }
 
     await this.dataSource.transaction(async (manager) => {
       const request = await manager.findOne(WithdrawalRequest, {
@@ -233,12 +259,9 @@ export class WalletService {
         throw new BadRequestException('Withdrawal already processed');
       }
 
-      if (action === 'reject') {
-        throw new BadRequestException('Use rejectWithdrawal()');
-      }
-
       request.status = WithdrawalStatus.COMPLETED;
       request.processedAt = new Date();
+      request.notes = notes ?? '';
 
       completedRequest = await manager.save(request);
     });
@@ -247,10 +270,15 @@ export class WalletService {
       userId: completedRequest.merchantId,
       amount: completedRequest.amount,
       withdrawalId: completedRequest.id,
+      userEmail,
     });
   }
 
-  async rejectWithdrawal(requestId: string, reason: string): Promise<void> {
+  async rejectWithdrawal(
+    requestId: string,
+    reason: string,
+    userEmail?: string,
+  ): Promise<void> {
     let rejectedRequest!: WithdrawalRequest;
 
     // Financial updates are isolated in the transaction.
@@ -310,6 +338,7 @@ export class WalletService {
       amount: rejectedRequest.amount,
       withdrawalId: rejectedRequest.id,
       reason,
+      userEmail: userEmail ?? '',
     });
   }
 }

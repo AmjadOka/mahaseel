@@ -61,7 +61,7 @@ export class AdminWithdrawalsController {
     return this.withdrawalsService.getWithdrawal(id);
   }
 
-  @Put(':id')
+  @Put(':id/accept')
   @ApiOperation({ summary: '[Admin] Approve or reject a withdrawal' })
   @ApiResponse({ status: 400, description: 'Already processed' })
   processWithdrawal(
@@ -70,6 +70,21 @@ export class AdminWithdrawalsController {
     @CurrentUser() admin: AuthUser,
   ) {
     return this.withdrawalsService.processWithdrawal(id, {
+      action: dto.action,
+      adminNotes: dto.adminNotes,
+      adminId: admin.sub,
+    });
+  }
+
+  @Put(':id/reject')
+  @ApiOperation({ summary: '[Admin] Reject a withdrawal' })
+  @ApiResponse({ status: 400, description: 'Already processed' })
+  rejectWithdrawal(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ProcessWithdrawalDto,
+    @CurrentUser() admin: AuthUser,
+  ) {
+    return this.withdrawalsService.rejectWithdrawl(id, {
       action: dto.action,
       adminNotes: dto.adminNotes,
       adminId: admin.sub,

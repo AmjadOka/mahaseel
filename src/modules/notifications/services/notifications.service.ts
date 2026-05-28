@@ -101,9 +101,9 @@ export class NotificationsService {
     await this.notify(params.userId, {
       type: NotificationType.WITHDRAWAL_COMPLETED,
       title: 'Withdrawal completed',
-      body: `${params.amount} SAR transferred successfully`,
+      body: `${params.amount} transferred successfully`,
       titleAr: 'تم التحويل',
-      bodyAr: `تم تحويل ${params.amount} ريال بنجاح`,
+      bodyAr: `تم تحويل ${params.amount}  بنجاح`,
       referenceType: 'withdrawal',
       referenceId: params.withdrawalId,
       channels: params.userEmail
@@ -126,7 +126,7 @@ export class NotificationsService {
       title: 'Withdrawal request submitted',
       body: `Your withdrawal request of ${params.amount} SAR is under review`,
       titleAr: 'تم تقديم طلب السحب',
-      bodyAr: `تم استلام طلب سحب بقيمة ${params.amount} ريال وهو قيد المراجعة`,
+      bodyAr: `تم استلام طلب سحب بقيمة ${params.amount}  وهو قيد المراجعة`,
       referenceType: 'withdrawal',
       referenceId: params.withdrawalId,
       data: { amount: params.amount },
@@ -138,15 +138,19 @@ export class NotificationsService {
     amount: number;
     withdrawalId: string;
     reason?: string;
+    userEmail?: string;
   }): Promise<void> {
     await this.notify(params.userId, {
       type: NotificationType.WITHDRAWAL_REJECTED,
       title: 'Withdrawal rejected',
       body: `Your withdrawal of ${params.amount} SAR was rejected`,
       titleAr: 'تم رفض طلب السحب',
-      bodyAr: `تم رفض طلب السحب بقيمة ${params.amount} ريال`,
+      bodyAr: `تم رفض طلب السحب بقيمة ${params.amount}`,
       referenceType: 'withdrawal',
       referenceId: params.withdrawalId,
+      channels: params.userEmail
+        ? [NotificationChannel.IN_APP, NotificationChannel.EMAIL]
+        : [NotificationChannel.IN_APP],
       data: {
         amount: params.amount,
         ...(params.reason ? { reason: params.reason } : {}),

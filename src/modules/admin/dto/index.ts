@@ -36,9 +36,12 @@ export class ProcessWithdrawalDto {
   @ApiPropertyOptional({
     description: 'Optional admin note — stored on the request and in audit log',
   })
+  @IsString()
+  adminNotes: string;
+
   @IsOptional()
   @IsString()
-  adminNotes?: string;
+  userEmail?: string;
 }
 
 // ─── Orders ───────────────────────────────────────────────────────────────────
