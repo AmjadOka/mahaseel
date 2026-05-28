@@ -24,6 +24,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { GoogleAuthGuard } from 'src/common/guards/google-auth-guard';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { Throttle } from '@nestjs/throttler';
+import { SetPasswordDto } from './dto/set-password.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -156,6 +157,14 @@ export class AuthController {
     res.redirect(`${frontendUrl}/auth/success`);
   }
 
+  @Post('set-password')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 3, ttl: 180_000 } })
+  setPassword(@CurrentUser() user: User, @Body() dto: SetPasswordDto) {
+    return this.authService.setPassword(user.id, dto.newPassword);
+  }
   /* =====================================================
       SESSION MANAGEMENT
   ===================================================== */
@@ -229,7 +238,7 @@ export class AuthController {
       ttl: 180_000,
     },
   })
-  changePassword(@Body('email') reset: ChangePasswordDto) {
+  changePassword(@Body() reset: ChangePasswordDto) {
     return this.resetPasswordService.changePassword(reset);
   }
 

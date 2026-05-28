@@ -1,5 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsMobilePhone, IsString, MinLength } from 'class-validator';
+import {
+  IsEmail,
+  IsMobilePhone,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class SignUpDto {
   @IsString()
@@ -8,6 +14,7 @@ export class SignUpDto {
   @IsEmail()
   email: string;
 
+  @MaxLength(72)
   @MinLength(6)
   password: string;
 

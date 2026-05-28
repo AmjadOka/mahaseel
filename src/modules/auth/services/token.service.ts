@@ -16,7 +16,7 @@ export class TokenService {
     userId: string,
     role: string,
     email: string,
-    tokenVersion: number = 0,
+    tokenVersion: number,
   ) {
     const accessJti = uuid();
     const refreshJti = uuid();
