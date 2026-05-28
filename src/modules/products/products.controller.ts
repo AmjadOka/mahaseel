@@ -178,7 +178,7 @@ export class ProductsController {
   @ApiOperation({ summary: 'Delete a product media item' })
   deleteMedia(
     @Param('id', ParseUUIDPipe) id: string,
-    @Param('mediaId') mediaId: string,
+    @Param('mediaId', ParseUUIDPipe) mediaId: string,
     @CurrentUser() user: AuthUser,
   ) {
     return this.productsService.deleteMedia(id, mediaId, user.sub);

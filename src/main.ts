@@ -43,7 +43,6 @@ async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     fastifyAdapter,
-    { bodyParser: false },
   );
 
   const config = app.get(ConfigService);
