@@ -7,6 +7,7 @@ import {
   ManyToOne,
   OneToOne,
   JoinColumn,
+  OneToMany,
 } from 'typeorm';
 import { SaleMethod, Unit } from '../../../common/enums/Unit.enum.js';
 import {
@@ -18,6 +19,7 @@ import { Product } from '../../products/entities/product.entity';
 import { Payment } from '../../payments/entities/payment.entity';
 import { Rating } from '../../ratings/entities/rating.entity';
 import { DeliveryMethod } from '../../../common/enums/delivery.enum';
+import { DecimalTransformer } from 'src/database/transformers/decimal.transformer';
 @Entity('orders')
 export class Order {
   @PrimaryGeneratedColumn('uuid')
@@ -35,7 +37,13 @@ export class Order {
   @Column({ name: 'sale_method', type: 'enum', enum: SaleMethod })
   saleMethod: SaleMethod;
 
-  @Column({ name: 'offered_price', type: 'decimal', precision: 12, scale: 2 })
+  @Column({
+    name: 'offered_price',
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    transformer: new DecimalTransformer(),
+  })
   offeredPrice: number;
 
   @Column({
@@ -44,8 +52,9 @@ export class Order {
     precision: 12,
     scale: 2,
     nullable: true,
+    transformer: new DecimalTransformer(),
   })
-  finalPrice: number;
+  finalPrice: number | null;
 
   @Column({
     name: 'platform_fee',
@@ -53,6 +62,7 @@ export class Order {
     precision: 12,
     scale: 2,
     nullable: true,
+    transformer: new DecimalTransformer(),
   })
   platformFee: number;
 
@@ -119,6 +129,6 @@ export class Order {
   @OneToOne(() => Payment, (p) => p.order)
   payment: Payment;
 
-  @OneToOne(() => Rating, (r) => r.order)
+  @OneToMany(() => Rating, (r) => r.order)
   rating: Rating;
 }

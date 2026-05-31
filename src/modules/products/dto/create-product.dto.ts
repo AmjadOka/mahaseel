@@ -8,6 +8,9 @@ import {
   Min,
   IsUUID,
   IsInt,
+  Max,
+  MinDate,
+  MaxLength,
 } from 'class-validator';
 
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
@@ -17,6 +20,7 @@ import { Type } from 'class-transformer';
 import { SaleMethod, Unit } from '../../../common/enums/Unit.enum.js';
 
 import { DeliveryMethod } from '../../../common/enums/delivery.enum.js';
+import { IsPriceRangeValid } from 'src/common/validator/price-range.validator';
 
 export class CreateProductDto {
   @ApiProperty()
@@ -55,7 +59,7 @@ export class CreateProductDto {
    * FIXED PRICE
    */
   @ApiPropertyOptional()
-  @ValidateIf((o) => o.saleMethod === SaleMethod.FIXED)
+  @ValidateIf((o: CreateProductDto) => o.saleMethod === SaleMethod.FIXED)
   @IsNumber()
   @Min(0)
   @Type(() => Number)
@@ -65,7 +69,7 @@ export class CreateProductDto {
    * AUCTION START PRICE
    */
   @ApiPropertyOptional()
-  @ValidateIf((o) => o.saleMethod === SaleMethod.AUCTION)
+  @ValidateIf((o: CreateProductDto) => o.saleMethod === SaleMethod.AUCTION)
   @IsNumber()
   @Min(0)
   @Type(() => Number)
@@ -75,8 +79,9 @@ export class CreateProductDto {
    * AUCTION END DATE
    */
   @ApiPropertyOptional()
-  @ValidateIf((o) => o.saleMethod === SaleMethod.AUCTION)
+  @ValidateIf((o: CreateProductDto) => o.saleMethod === SaleMethod.AUCTION)
   @IsDateString()
+  @MinDate(new Date())
   auctionEndAt?: string;
 
   /**
@@ -87,7 +92,7 @@ export class CreateProductDto {
     example: 24,
     description: 'Auction duration in hours',
   })
-  @ValidateIf((o) => o.saleMethod === SaleMethod.AUCTION)
+  @ValidateIf((o: CreateProductDto) => o.saleMethod === SaleMethod.AUCTION)
   @IsInt()
   @Min(1)
   @Type(() => Number)
@@ -114,6 +119,7 @@ export class FilterMarketDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   q?: string;
 
   @ApiPropertyOptional()
@@ -121,9 +127,7 @@ export class FilterMarketDto {
   @IsUUID()
   categoryId?: string;
 
-  @ApiPropertyOptional({
-    enum: SaleMethod,
-  })
+  @ApiPropertyOptional({ enum: SaleMethod })
   @IsOptional()
   @IsEnum(SaleMethod)
   saleMethod?: SaleMethod;
@@ -132,22 +136,24 @@ export class FilterMarketDto {
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
+  @Min(1)
   priceMin?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
+  @Min(1)
+  @IsPriceRangeValid()
   priceMax?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(150)
   location?: string;
 
-  @ApiPropertyOptional({
-    enum: Unit,
-  })
+  @ApiPropertyOptional({ enum: Unit })
   @IsOptional()
   @IsEnum(Unit)
   unit?: Unit;
@@ -155,10 +161,15 @@ export class FilterMarketDto {
   @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
+  @IsInt()
+  @Min(1)
   page?: number = 1;
 
   @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
   limit?: number = 20;
 }

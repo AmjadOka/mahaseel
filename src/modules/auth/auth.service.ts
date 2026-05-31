@@ -25,7 +25,7 @@ import { RedisService } from 'src/shared/redis/redis.service';
 import { MailProvider } from 'src/shared/mail/mail.provider';
 import { EmailTemplate } from 'src/common/enums/email.enum';
 
-const VERIFICATION_TTL_MS = 10 * 60 * 1000; // 10 min
+const VERIFICATION_TTL_MS = 10 * 60 * 1000;
 
 @Injectable()
 export class AuthService {
@@ -76,7 +76,6 @@ export class AuthService {
 
     await this.usersRepository.save(user);
 
-    // Fire-and-forget — never block the response on mail delivery
     void this.mail.send({
       to: user.email,
       template: EmailTemplate.EMAIL_VERIFICATION,
@@ -136,6 +135,12 @@ export class AuthService {
     user.refreshTokenHash = this.tokenService.hashToken(tokens.refreshToken);
     await this.usersRepository.save(user);
 
+    void this.mail.send({
+      to: user.email,
+      template: EmailTemplate.WELCOME,
+      subject: 'welcome to mahaseel',
+      context: { name: user.fullName },
+    });
     return {
       message: 'Email verified successfully',
       user: instanceToPlain(user),

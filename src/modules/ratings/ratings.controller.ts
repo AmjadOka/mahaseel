@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -30,6 +31,7 @@ import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { Role } from 'src/common/enums/role.enum';
 import { FlagStatus } from './entities/rating.entity';
 import type { AuthUser } from 'src/common/types';
+import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('ratings')
 @Controller('ratings')
@@ -50,7 +52,7 @@ export class RatingsController {
   @Patch(':id')
   @ApiOperation({ summary: 'Edit a rating you submitted' })
   update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
     @Body() dto: UpdateRatingDto,
   ) {
@@ -74,14 +76,14 @@ export class RatingsController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Get a single rating by ID' })
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.ratingsService.findOne(id);
   }
 
   @Get('user/:userId')
   @ApiOperation({ summary: 'Public ratings received by any user/merchant' })
   getByUser(
-    @Param('userId') userId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
     @Query() pagination: PaginationDto,
   ) {
     return this.ratingsService.getByUser(userId, pagination);
@@ -90,12 +92,13 @@ export class RatingsController {
   // ─── Flags ────────────────────────────────────────────────────────────────
 
   @Post(':id/flag')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Flag an abusive or false rating (reviewed party only)',
   })
   flagRating(
-    @Param('id') ratingId: string,
+    @Param('id', ParseUUIDPipe) ratingId: string,
     @CurrentUser() user: AuthUser,
     @Body() dto: FlagRatingDto,
   ) {
@@ -125,7 +128,10 @@ export class RatingsController {
   @Patch('admin/flags/:flagId')
   @Roles(Role.ADMIN)
   @ApiOperation({ summary: '[Admin] Dismiss or remove a flagged rating' })
-  resolveFlag(@Param('flagId') flagId: string, @Body() dto: ReviewFlagDto) {
+  resolveFlag(
+    @Param('flagId', ParseUUIDPipe) flagId: string,
+    @Body() dto: ReviewFlagDto,
+  ) {
     return this.ratingsService.resolveFlag(flagId, dto);
   }
 }

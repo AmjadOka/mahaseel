@@ -15,6 +15,7 @@ import { RedisService } from 'src/shared/redis/redis.service';
 import { PromotionStatus } from 'src/common/enums/promotionStatus';
 import { NotificationsService } from '../notifications/services/notifications.service';
 import { NotificationType } from 'src/common/enums/notification.enum';
+import { Order } from '../orders/entities/order.entity';
 // import { StorageService } from '../../shared/storage/storage.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -132,7 +133,7 @@ export class UsersService {
         `COUNT(CASE WHEN o.status = 'cancelled' THEN 1 END)`,
         'cancelledOrders',
       )
-      .leftJoin('orders', 'o', 'o.buyer_id = u.id OR o.merchant_id = u.id')
+      .leftJoin(Order, 'o', 'o.buyer_id = u.id OR o.merchant_id = u.id')
       .where('u.id = :userId', { userId })
       .getRawOne<{
         totalOrders: string;
@@ -288,6 +289,7 @@ export class UsersService {
     await Promise.all([
       this.redis.del(CK.user(id)),
       this.redis.del(CK.public(id)),
+      this.redis.del(CK.stats(id)),
     ]);
   }
 }

@@ -287,6 +287,7 @@ export class WalletService {
     await this.dataSource.transaction(async (manager) => {
       const request = await manager.findOne(WithdrawalRequest, {
         where: { id: requestId },
+        lock: { mode: 'pessimistic_write' },
       });
 
       if (!request) {

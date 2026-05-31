@@ -17,8 +17,8 @@ import { Order } from '../../orders/entities/order.entity';
 import { Rating } from '../../ratings/entities/rating.entity';
 import { Wallet } from '../../wallet/entities/wallet.entity';
 import { Notification } from '../../notifications/entities/notification.entity';
-import { BankAccount } from 'src/modules/bank-account/entities/bank-account.entity';
 import { PromotionStatus } from 'src/common/enums/promotionStatus';
+import { BankAccount } from 'src/modules/bank-account/entities/bank-account.entity';
 
 @Entity('users')
 export class User {
@@ -47,6 +47,8 @@ export class User {
   @Column({ nullable: true, type: 'varchar' })
   avatarPublicId: string | null;
 
+  @Column({ type: 'text', nullable: true })
+  bio: string | null;
   /* =====================================================
       AUTH — LOCAL
   ===================================================== */

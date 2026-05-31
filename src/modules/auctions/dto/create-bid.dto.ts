@@ -9,13 +9,7 @@ export class PlaceBidDto {
 
   @ApiProperty({ description: 'Bid amount — must exceed current highest bid' })
   @IsNumber()
-  @Min(0)
+  @Min(1)
   @Type(() => Number)
   amount: number;
-}
-
-export class AcceptBidDto {
-  @ApiProperty({ description: 'Bid ID to accept (merchant only)' })
-  @IsUUID()
-  bidId: string;
 }

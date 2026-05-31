@@ -36,7 +36,6 @@ import { Order } from '../orders/entities/order.entity';
 import { Product } from '../products/entities/product.entity';
 import { WalletService } from '../wallet/wallet.service';
 import { NotificationsService } from '../notifications/services/notifications.service';
-import { MailService } from './mails/mail.service';
 import { STRIPE_CLIENT } from './stripe.provider';
 import {
   OrderStatus,
@@ -46,6 +45,8 @@ import { PaymentStatus } from 'src/common/enums/payment.enum';
 import { ProductStatus } from 'src/common/enums/product.enum';
 import { SaleMethod } from 'src/common/enums/Unit.enum';
 import { NotificationType } from 'src/common/enums/notification.enum';
+import { MailProvider } from 'src/shared/mail/mail.provider';
+import { EmailTemplate } from 'src/common/enums/email.enum';
 
 // ─── Inline Stripe type helpers ──────────────────────────────────────────────
 
@@ -77,7 +78,7 @@ export class PaymentsService {
     @Inject(STRIPE_CLIENT) private readonly stripe: Stripe.Stripe,
     private readonly walletService: WalletService,
     private readonly notificationsService: NotificationsService,
-    private readonly mailService: MailService,
+    private readonly mailService: MailProvider,
     private readonly config: ConfigService,
     private readonly dataSource: DataSource,
   ) {}
@@ -175,28 +176,15 @@ export class PaymentsService {
     //
     // Fire-and-forget: sendPaymentLink catches its own errors so a mail
     // failure never surfaces here and never rolls back any caller.
-    void this.mailService.sendPaymentLink({
+    void this.sendPaymentLinkEmail({
+      buyerId,
       to: buyerEmail,
       productName,
       amount: finalPrice,
+      currency: 'USD',
       paymentUrl,
       orderId,
     });
-
-    // ── In-app notification ───────────────────────────────────────────────────
-    await this.notificationsService.notify(buyerId, {
-      type: NotificationType.PAYMENT_REQUIRED,
-      title: '',
-      body: '',
-      titleAr: 'يرجى إتمام الدفع',
-      bodyAr: `تم قبول طلبك على "${productName}". أكمل الدفع الآن لتأكيد طلبك.`,
-      referenceType: 'order',
-      referenceId: orderId,
-    });
-
-    this.logger.log(
-      `Payment session created for order ${orderId}, buyer ${buyerId}`,
-    );
   }
 
   // ─── Manual initiate (buyer-triggered, existing flow kept as a fallback) ──
@@ -676,5 +664,53 @@ export class PaymentsService {
     }
 
     return payment;
+  }
+
+  //////////////
+
+  async sendPaymentLinkEmail(opts: {
+    buyerId: string;
+    to: string;
+    buyerName?: string;
+    productName: string;
+    amount: number;
+    currency?: string;
+    paymentUrl: string;
+    orderId: string;
+  }): Promise<void> {
+    const [emailResult, notifResult] = await Promise.allSettled([
+      // best-effort email
+      this.mailService.send({
+        to: opts.to,
+        template: EmailTemplate.PAYMENT_LINK,
+        subject: `إتمام الدفع لطلبك — ${opts.productName}`,
+        context: opts,
+      }),
+
+      // primary channel
+      this.notificationsService.notify(opts.buyerId, {
+        type: NotificationType.PAYMENT_REQUIRED,
+        title: 'Complete your payment',
+        body: `Your order for "${opts.productName}" was accepted. Pay now to confirm.`,
+        titleAr: 'يرجى إتمام الدفع',
+        bodyAr: `تم قبول طلبك على "${opts.productName}". أكمل الدفع الآن لتأكيد طلبك.`,
+        referenceType: 'order',
+        referenceId: opts.orderId,
+      }),
+    ]);
+
+    if (emailResult.status === 'rejected') {
+      this.logger.warn(
+        `Payment link email failed for order ${opts.orderId}: ${emailResult.reason}`,
+      );
+    }
+
+    if (notifResult.status === 'rejected') {
+      this.logger.error(
+        `Payment notification failed for order ${opts.orderId}: ${notifResult.reason}`,
+      );
+    }
+
+    this.logger.log(`Payment session created for order ${opts.orderId}`);
   }
 }

@@ -79,6 +79,10 @@ export class Farm {
   @JoinColumn({ name: 'owner_id' })
   owner: User;
 
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'approved_by' })
+  approver: User | null;
+
   @OneToMany(() => Product, (product) => product.farm)
   products: Product[];
 

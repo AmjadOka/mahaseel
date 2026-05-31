@@ -68,8 +68,11 @@ export class NotificationsController {
   }
 
   @Get('unread')
-  getUnread(@CurrentUser() user: AuthUser) {
-    return this.notificationsService.getUnread(user.sub);
+  getUnread(
+    @CurrentUser() user: AuthUser,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 50,
+  ) {
+    return this.notificationsService.getUnread(user.sub, Math.min(limit, 100));
   }
 
   @Get('unread/count')

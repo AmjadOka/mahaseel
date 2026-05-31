@@ -9,7 +9,6 @@ import {
   Param,
   Query,
   UseGuards,
-  UseInterceptors,
   ParseUUIDPipe,
   ParseBoolPipe,
   BadRequestException,
@@ -17,8 +16,6 @@ import {
   HttpStatus,
   Req,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer'; // ← explicit memoryStorage
 import {
   ApiTags,
   ApiBearerAuth,
@@ -29,19 +26,16 @@ import {
   ApiBody,
 } from '@nestjs/swagger';
 
-import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { AdminGuard } from 'src/common/guards/admin.guard';
 import { CategoriesService } from './categories.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
-import { Roles } from 'src/common/decorators';
-import { Role } from 'src/common/enums/role.enum';
+import { Public } from 'src/common/decorators';
 import type { FastifyRequest } from 'fastify';
 import { FileValidationPipe } from '../upload/validation.pipe';
 @ApiTags('Categories')
 @Controller('categories')
-@UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class CategoriesController {
   constructor(private readonly service: CategoriesService) {}
@@ -49,6 +43,7 @@ export class CategoriesController {
   // ── List ───────────────────────────────────────────────────────────────────
 
   @Get()
+  @Public()
   @ApiOperation({ summary: '[Public] List all categories (includes inactive)' })
   @ApiQuery({
     name: 'parentId',
@@ -62,7 +57,8 @@ export class CategoriesController {
     @Query('isActive', new ParseBoolPipe({ optional: true }))
     isActive?: boolean,
   ) {
-    const resolvedParentId = parentId === 'null' ? null : parentId;
+    const resolvedParentId =
+      parentId === undefined ? null : parentId === 'null' ? null : parentId;
     return this.service.findAll(pagination, {
       parentId: resolvedParentId,
       isActive,
@@ -70,6 +66,7 @@ export class CategoriesController {
   }
 
   @Get(':id')
+  @Public()
   @ApiOperation({
     summary: '[Public] Get a single category with parent + children',
   })
@@ -81,13 +78,11 @@ export class CategoriesController {
 
 @ApiTags('Admin — Categories')
 @Controller('admin/categories')
-@Roles(Role.ADMIN)
 @UseGuards(AdminGuard)
 @ApiBearerAuth()
 export class AdminCategoriesController {
   constructor(private readonly service: CategoriesService) {}
 
-  @UseGuards(AdminGuard)
   @Post()
   @ApiOperation({
     summary: '[Admin] Create a category',
@@ -119,7 +114,6 @@ export class AdminCategoriesController {
   // ── Replace icon ───────────────────────────────────────────────────────────
 
   @Patch(':id/icon')
-  @UseInterceptors(FileInterceptor('icon', { storage: memoryStorage() })) // ← memoryStorage
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: '[Admin] Upload or replace the category icon' })
   @ApiBody({
@@ -148,7 +142,6 @@ export class AdminCategoriesController {
           encoding: part.encoding,
         } as Express.Multer.File;
       }
-      // all other parts are drained by iterating past them
     }
 
     if (!file) {

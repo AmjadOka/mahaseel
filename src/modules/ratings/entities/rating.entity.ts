@@ -4,7 +4,6 @@ import {
   Column,
   CreateDateColumn,
   ManyToOne,
-  OneToOne,
   OneToMany,
   JoinColumn,
   Check,
@@ -17,12 +16,12 @@ import { Order } from '../../orders/entities/order.entity';
 
 @Entity('ratings')
 @Check('"score" >= 1 AND "score" <= 5')
-@Unique(['orderId', 'reviewerId']) // Fix: composite unique — both parties can rate
+@Unique(['orderId', 'reviewerId'])
 export class Rating {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'order_id' }) // removed unique: true — now handled by @Unique above
+  @Column({ name: 'order_id' })
   orderId: string;
 
   @Column({ name: 'reviewer_id' })
@@ -40,7 +39,7 @@ export class Rating {
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @OneToOne(() => Order, (o) => o.rating)
+  @ManyToOne(() => Order)
   @JoinColumn({ name: 'order_id' })
   order: Order;
 
@@ -88,13 +87,13 @@ export class RatingFlag {
   @Column({ type: 'enum', enum: FlagReason, default: FlagReason.OTHER })
   reason: FlagReason;
 
-  @Column({ type: 'text', nullable: true })
+  @Column({ type: 'varchar', nullable: true, length: 400 })
   notes: string;
 
   @Column({ type: 'enum', enum: FlagStatus, default: FlagStatus.PENDING })
   status: FlagStatus;
 
-  @Column({ name: 'admin_notes', type: 'text', nullable: true })
+  @Column({ name: 'admin_notes', type: 'varchar', nullable: true, length: 400 })
   adminNotes: string;
 
   @CreateDateColumn({ name: 'created_at' })

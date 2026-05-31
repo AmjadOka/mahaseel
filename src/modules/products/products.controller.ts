@@ -27,11 +27,15 @@ import type { FastifyRequest } from 'fastify';
 
 import { ProductsService } from './products.service';
 
-import { CreateProductDto, UpdateProductDto } from './dto/create-product.dto';
+import {
+  CreateProductDto,
+  FilterMarketDto,
+  UpdateProductDto,
+} from './dto/create-product.dto';
 
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 
-import { CurrentUser, Roles } from '../../common/decorators';
+import { CurrentUser, Public, Roles } from '../../common/decorators';
 
 import { Role } from 'src/common/enums/role.enum';
 
@@ -182,5 +186,33 @@ export class ProductsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.productsService.deleteMedia(id, mediaId, user.sub);
+  }
+}
+
+@ApiTags('Market')
+@Controller('market')
+export class MarketController {
+  constructor(private readonly productsService: ProductsService) {}
+
+  /**
+   * GET /market
+   * Public — no auth required. Buyers and guests can browse.
+   */
+  @Get()
+  @Public()
+  @ApiOperation({ summary: 'Browse marketplace products' })
+  browse(@Query() filters: FilterMarketDto) {
+    return this.productsService.searchMarket(filters);
+  }
+
+  /**
+   * GET /market/:id
+   * Public — product detail page.
+   */
+  @Get(':id')
+  @Public()
+  @ApiOperation({ summary: 'Get product detail (public view)' })
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.productsService.findPublicProduct(id);
   }
 }

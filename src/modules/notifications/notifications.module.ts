@@ -13,9 +13,18 @@ import { NotificationsScheduler } from './notifications.scheduler';
 import { BullModule } from '@nestjs/bullmq';
 import { NOTIFICATIONS_QUEUE } from './notifications.constants';
 import { NotificationsSseService } from './services/notifications-sse.service';
+import { JwtModule } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 
 @Module({
   imports: [
+    JwtModule.registerAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        secret: config.getOrThrow('jwt.accessSecret'),
+      }),
+    }),
+
     TypeOrmModule.forFeature([Notification]),
     BullModule.registerQueue({ name: NOTIFICATIONS_QUEUE }),
   ],

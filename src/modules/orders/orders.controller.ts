@@ -10,10 +10,15 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { OrdersService } from './orders.service';
-import { CreateOrderDto, UpdateOrderStatusDto } from './dto/create-order.dto';
+import {
+  CreateOrderDto,
+  RejectOrderDto,
+  UpdateOrderStatusDto,
+} from './dto/create-order.dto';
 
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -52,7 +57,10 @@ export class OrdersController {
   @Roles(Role.BUYER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cancel a pending order' })
-  cancel(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  cancel(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.ordersService.cancelOrder(id, user.sub);
   }
 
@@ -71,7 +79,10 @@ export class OrdersController {
   @Put(':id/accept')
   @Roles(Role.MERCHANT)
   @ApiOperation({ summary: 'Accept an order — reveals buyer phone' })
-  accept(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  accept(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.ordersService.acceptOrder(id, user.sub);
   }
 
@@ -79,17 +90,20 @@ export class OrdersController {
   @Roles(Role.MERCHANT)
   @ApiOperation({ summary: 'Reject an order' })
   reject(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
-    @Body('reason') reason: string,
+    @Body() dto: RejectOrderDto,
   ) {
-    return this.ordersService.rejectOrder(id, user.sub, reason);
+    return this.ordersService.rejectOrder(id, user.sub, dto.reason);
   }
 
   @Put(':id/confirm')
   @Roles(Role.BUYER)
   @ApiOperation({ summary: 'Buyer confirms delivery completion' })
-  confirmOrder(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  confirmOrder(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.ordersService.confirmCompleted(id, user.sub);
   }
 
@@ -97,7 +111,7 @@ export class OrdersController {
   @Roles(Role.MERCHANT)
   @ApiOperation({ summary: 'Update order delivery status' })
   updateStatus(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
     @Body() dto: UpdateOrderStatusDto,
   ) {
@@ -108,7 +122,10 @@ export class OrdersController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Get a single order (buyer or merchant)' })
-  findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.ordersService.findOneForUser(id, user);
   }
 }

@@ -15,7 +15,7 @@ export class CreateBankAccountDto {
   @ApiProperty({ example: '0123456789' })
   @IsString()
   @Length(5, 50)
-  @Matches(/^[0-9A-Za-z\-]+$/, {
+  @Matches(/^[0-9A-Za-z-]+$/, {
     message: 'accountNumber must be alphanumeric',
   })
   accountNumber: string;

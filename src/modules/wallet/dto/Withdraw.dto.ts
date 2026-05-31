@@ -10,7 +10,6 @@ export class WithdrawDto {
   amount: number;
 
   @ApiPropertyOptional()
-  @IsOptional()
   @IsUUID()
   bankAccountId: string;
 

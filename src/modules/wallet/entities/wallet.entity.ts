@@ -42,6 +42,7 @@ export class Wallet {
     precision: 12,
     scale: 2,
     default: 0,
+    transformer: new DecimalTransformer(),
   })
   pendingBalance: number;
 
@@ -51,8 +52,11 @@ export class Wallet {
     precision: 12,
     scale: 2,
     default: 0,
+    transformer: new DecimalTransformer(),
   })
   totalEarned: number;
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
@@ -82,10 +86,21 @@ export class WalletTransaction {
   @Column({ type: 'enum', enum: WalletTransactionReason })
   reason: WalletTransactionReason;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    transformer: new DecimalTransformer(),
+  })
   amount: number;
 
-  @Column({ name: 'balance_after', type: 'decimal', precision: 12, scale: 2 })
+  @Column({
+    name: 'balance_after',
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    transformer: new DecimalTransformer(),
+  })
   balanceAfter: number;
 
   @Column({ name: 'reference_type', nullable: true })
@@ -123,7 +138,12 @@ export class WithdrawalRequest {
   @Column({ name: 'bank_account_id', nullable: true })
   bankAccountId: string;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    transformer: new DecimalTransformer(),
+  })
   amount: number;
 
   @Column({ type: 'text', nullable: true })

@@ -16,6 +16,7 @@ import { SaleMethod, Unit } from 'src/common/enums/Unit.enum';
 import { ProductStatus } from 'src/common/enums/product.enum';
 import { DeliveryMethod } from 'src/common/enums/delivery.enum';
 import { MediaType } from 'src/common/enums/platform.enum';
+import { DecimalTransformer } from 'src/database/transformers/decimal.transformer';
 
 @Entity('products')
 export class Product {
@@ -37,7 +38,12 @@ export class Product {
   @Column({ type: 'text', nullable: true })
   description: string;
 
-  @Column({ type: 'decimal', precision: 12, scale: 3 })
+  @Column({
+    type: 'decimal',
+    precision: 12,
+    scale: 3,
+    transformer: new DecimalTransformer(),
+  })
   quantity: number;
 
   @Column({ type: 'decimal', precision: 12, scale: 3, nullable: true })
@@ -55,6 +61,7 @@ export class Product {
     precision: 12,
     scale: 2,
     nullable: true,
+    transformer: new DecimalTransformer(),
   })
   fixedPrice: number;
 
@@ -64,6 +71,7 @@ export class Product {
     precision: 12,
     scale: 2,
     nullable: true,
+    transformer: new DecimalTransformer(),
   })
   auctionStartPrice: number;
 
@@ -76,6 +84,7 @@ export class Product {
     precision: 12,
     scale: 2,
     nullable: true,
+    transformer: new DecimalTransformer(),
   })
   currentBid: number | null;
 

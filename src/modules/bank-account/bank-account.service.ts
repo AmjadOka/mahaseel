@@ -128,28 +128,45 @@ export class BankAccountService {
     userId: string,
     accountId: string,
   ): Promise<{ message: string }> {
-    const account = await this.findOwned(userId, accountId);
-
-    // Soft-delete by marking inactive
-    account.isActive = false;
-    await this.repo.save(account);
-
-    // If deleted account was the default, promote the oldest remaining account
-    if (account.isDefault) {
-      const next = await this.repo.findOne({
-        where: { userId, isActive: true },
-        order: { createdAt: 'ASC' },
+    await this.dataSource.transaction(async (manager) => {
+      const account = await manager.findOne(BankAccount, {
+        where: {
+          id: accountId,
+          userId,
+          isActive: true,
+        },
       });
 
-      if (next) {
-        next.isDefault = true;
-        await this.repo.save(next);
+      if (!account) {
+        throw new NotFoundException('Bank account not found');
       }
-    }
+
+      // Soft delete
+      account.isActive = false;
+      account.isDefault = false;
+      await manager.save(account);
+
+      // Promote another account if needed
+      if (account.isDefault) {
+        const next = await manager.findOne(BankAccount, {
+          where: {
+            userId,
+            isActive: true,
+          },
+          order: {
+            createdAt: 'ASC',
+          },
+        });
+
+        if (next) {
+          next.isDefault = true;
+          await manager.save(next);
+        }
+      }
+    });
 
     return { message: 'Bank account removed' };
   }
-
   /* =====================================================
       ADMIN — get accounts for any merchant
   ===================================================== */

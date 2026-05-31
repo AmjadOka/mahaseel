@@ -102,6 +102,7 @@ export class RatingsService {
     });
 
     const saved = await this.ratingsRepo.save(rating);
+
     await this.recalculateRating(reviewedId);
 
     const reviewer = await this.usersRepo.findOne({
@@ -168,7 +169,7 @@ export class RatingsService {
 
     const cacheKey = CK.byUser(userId, page, limit);
     const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
+    if (cached) return JSON.parse(cached) as Rating[];
 
     const qb = this.ratingsRepo
       .createQueryBuilder('r')
@@ -190,7 +191,7 @@ export class RatingsService {
     const cacheKey = CK.given(reviewerId, page, limit);
 
     const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
+    if (cached) return JSON.parse(cached) as Rating[];
 
     const qb = this.ratingsRepo
       .createQueryBuilder('r')
@@ -270,16 +271,14 @@ export class RatingsService {
     }
 
     if (dto.status === FlagStatus.REMOVED) {
-      // ✅ recalculate AFTER the transaction commits — not inside it
       await this.dataSource.transaction(async (manager) => {
-        await manager.delete(Rating, flag.ratingId);
         await manager.update(RatingFlag, flagId, {
           status: FlagStatus.REMOVED,
           adminNotes: dto.adminNotes,
         });
+        await manager.delete(Rating, flag.ratingId);
       });
 
-      // Recalculate after the transaction commits — this also busts user caches
       await Promise.all([
         this.redis.del(CK.one(flag.ratingId)),
         this.recalculateRating(flag.rating.reviewedId),

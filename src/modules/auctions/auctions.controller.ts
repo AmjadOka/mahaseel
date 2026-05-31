@@ -32,6 +32,7 @@ import type { AuthUser } from 'src/common/types';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { FileValidationPipe } from '../upload/validation.pipe';
+import type { Request } from 'express';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BUYER — /auctions/bids
@@ -54,7 +55,7 @@ export class AuctionBidsController {
   placeBid(
     @CurrentUser() user: AuthUser,
     @Body() dto: PlaceBidDto,
-    @Req() req: any,
+    @Req() req: Request,
   ) {
     return this.auctionsService.placeBid(user.sub, dto, req.ip);
   }
@@ -76,7 +77,10 @@ export class AuctionBidsController {
   @Delete(':bidId')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Withdraw a bid' })
-  withdrawBid(@Param('bidId') bidId: string, @CurrentUser() user: AuthUser) {
+  withdrawBid(
+    @Param('bidId', ParseUUIDPipe) bidId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.auctionsService.withdrawBid(bidId, user.sub);
   }
 }
@@ -100,7 +104,7 @@ export class AuctionMerchantController {
   @Get('products/:productId/bids')
   @ApiOperation({ summary: 'Get all bids on my auction product' })
   getBidsForProduct(
-    @Param('productId') productId: string,
+    @Param('productId', ParseUUIDPipe) productId: string,
     @CurrentUser() user: AuthUser,
   ) {
     return this.auctionsService.getBidsForProduct(productId, user.sub);
@@ -112,13 +116,12 @@ export class AuctionMerchantController {
    */
   @Post('bids/:bidId/accept')
   @ApiOperation({ summary: 'Accept a bid — closes auction and credits wallet' })
-  acceptBid(@Param('bidId') bidId: string, @CurrentUser() user: AuthUser) {
+  acceptBid(
+    @Param('bidId', ParseUUIDPipe) bidId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.auctionsService.acceptBid(bidId, user.sub);
   }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // 3. AuctionsController — add the two endpoints
-  // ─────────────────────────────────────────────────────────────────────────────
 
   @Put(':productId/image')
   @ApiOperation({ summary: 'Upload or replace the auction cover image' })

@@ -8,6 +8,8 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { SocketEvent } from '../../../common/enums/socket.enum';
+import { JwtService } from '@nestjs/jwt';
+import { JwtPayload } from 'src/modules/auth/interfaces/jwt-payload.interface';
 
 @WebSocketGateway({
   cors: { origin: '*' },
@@ -20,19 +22,26 @@ export class NotificationsGateway
   server: Server;
 
   private readonly logger = new Logger(NotificationsGateway.name);
-
+  private readonly jwtService: JwtService;
   afterInit() {
     this.logger.log('NotificationsGateway initialized');
   }
 
   async handleConnection(client: Socket) {
-    const userId = client.handshake.query.userId as string;
-    if (!userId) {
+    const token = client.handshake.auth?.token as string;
+    if (!token) {
       client.disconnect();
       return;
     }
-    await client.join(`user:${userId}`);
-    this.logger.log(`Client connected: ${client.id} → room user:${userId}`);
+    try {
+      const payload: JwtPayload = this.jwtService.verify(token);
+      await client.join(`user:${payload.sub}`);
+      this.logger.log(
+        `Client connected: ${client.id} → room user:${payload.sub}`,
+      );
+    } catch {
+      client.disconnect();
+    }
   }
 
   handleDisconnect(client: Socket) {

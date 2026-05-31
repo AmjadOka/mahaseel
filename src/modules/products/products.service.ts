@@ -51,6 +51,15 @@ export interface ProductStats {
   liveAuctions: number; // ACTIVE + AUCTION + auctionEndAt > now
 }
 
+export interface PaginatedProductResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  hasNext: boolean;
+}
+
 // ── Cache constants ───────────────────────────────────────────────────────────
 
 const TTL = {
@@ -76,6 +85,8 @@ const CK = {
 @Injectable()
 export class ProductsService {
   private readonly logger = new Logger(ProductsService.name);
+  private readonly MARKET_PAGE_CAP = 50; // max items per page
+  private readonly MARKET_TTL = 60 * 2; // 2 min — short enough to stay fresh
 
   constructor(
     @InjectRepository(Product)
@@ -415,97 +426,73 @@ export class ProductsService {
   |--------------------------------------------------------------------------
   */
 
-  async searchMarket(filter: FilterMarketDto) {
-    const cacheKey = CK.market(filter);
+  async searchMarket(
+    filter: FilterMarketDto,
+  ): Promise<PaginatedProductResult<Product>> {
+    const page = Math.max(1, filter.page ?? 1);
+    const limit = Math.min(
+      Math.max(1, filter.limit ?? 20),
+      this.MARKET_PAGE_CAP,
+    );
 
+    const cacheKey = CK.market({ ...filter, page, limit });
     const cached = await this.redis.get(cacheKey);
+
     if (cached) {
-      return JSON.parse(cached) as Product[];
+      return JSON.parse(cached) as PaginatedProductResult<Product>;
     }
 
-    const {
-      q,
-      categoryId,
-      saleMethod,
-      priceMin,
-      priceMax,
-      location,
-      unit,
-      page = 1,
-      limit = 20,
-    } = filter;
+    const { q, categoryId, saleMethod, priceMin, priceMax, location, unit } =
+      filter;
 
     const qb = this.repo
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.media', 'media')
       .leftJoinAndSelect('p.category', 'category')
       .innerJoin('p.farm', 'farm')
-      .where('p.status = :status', {
-        status: ProductStatus.ACTIVE,
-      })
-      .andWhere('p.isDeleted = false');
+      .where('p.status = :status', { status: ProductStatus.ACTIVE })
+      .andWhere('p.isDeleted = false')
+      .orderBy('p.createdAt', 'DESC')
+      .take(limit)
+      .skip((page - 1) * limit);
 
-    /*
-    |--------------------------------------------------------------------------
-    | Search
-    |--------------------------------------------------------------------------
-    */
-
-    if (q) {
+    if (q)
       qb.andWhere('(p.name ILIKE :q OR p.description ILIKE :q)', {
         q: `%${q}%`,
       });
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Filters
-    |--------------------------------------------------------------------------
-    */
-
-    if (categoryId) {
-      qb.andWhere('p.categoryId = :categoryId', {
-        categoryId,
-      });
-    }
-
-    if (saleMethod) {
-      qb.andWhere('p.saleMethod = :saleMethod', {
-        saleMethod,
-      });
-    }
-
-    if (unit) {
-      qb.andWhere('p.unit = :unit', {
-        unit,
-      });
-    }
-
-    if (priceMin !== undefined) {
+    if (categoryId) qb.andWhere('p.categoryId = :categoryId', { categoryId });
+    if (saleMethod) qb.andWhere('p.saleMethod = :saleMethod', { saleMethod });
+    if (unit) qb.andWhere('p.unit = :unit', { unit });
+    if (priceMin !== undefined)
       qb.andWhere('COALESCE(p.fixedPrice, p.auctionStartPrice) >= :priceMin', {
         priceMin,
       });
-    }
-
-    if (priceMax !== undefined) {
+    if (priceMax !== undefined)
       qb.andWhere('COALESCE(p.fixedPrice, p.auctionStartPrice) <= :priceMax', {
         priceMax,
       });
-    }
-
-    if (location) {
+    if (location)
       qb.andWhere('farm.locationText ILIKE :location', {
         location: `%${location}%`,
       });
+
+    const [items, total] = await qb.getManyAndCount();
+
+    const result: PaginatedProductResult<Product> = {
+      items,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      hasNext: page * limit < total,
+    };
+
+    if (items.length) {
+      await this.redis.set(cacheKey, JSON.stringify(result), this.MARKET_TTL);
     }
 
-    qb.orderBy('p.createdAt', 'DESC');
-
-    const result = await paginate(qb, page, limit);
-    await this.redis.set(cacheKey, JSON.stringify(result), TTL.marketSearch);
     return result;
   }
-
   /*
   |--------------------------------------------------------------------------
   | Relist Product

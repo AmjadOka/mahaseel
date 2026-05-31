@@ -7,7 +7,7 @@ export class DecimalTransformer implements ValueTransformer {
   }
 
   // JS → DB: never let null/undefined sneak through
-  to(value: number | null | undefined): number {
-    return value ?? 0;
+  to(value: number | null | undefined): number | null {
+    return value ?? null;
   }
 }

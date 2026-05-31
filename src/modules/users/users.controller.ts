@@ -16,12 +16,13 @@ import {
 import { UsersService } from './users.service';
 import type { UpdateProfileDto } from './users.service';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
-import { CurrentUser } from 'src/common/decorators';
+import { CurrentUser, Public } from 'src/common/decorators';
 import { ApiBody, ApiConsumes, ApiOperation } from '@nestjs/swagger';
 import type { FastifyRequest } from 'fastify';
 import { FileValidationPipe } from '../upload/validation.pipe';
 // ─── Controller ───────────────────────────────────────────────────────────────
 
+@UseGuards(JwtAuthGuard)
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
@@ -32,6 +33,7 @@ export class UsersController {
    * GET /users/:id/profile
    * Public — returns only safe fields for active, non-deleted users.
    */
+  @Public()
   @Get(':id/profile')
   getPublicProfile(@Param('id', ParseUUIDPipe) id: string) {
     return this.usersService.getPublicProfile(id);
@@ -41,6 +43,7 @@ export class UsersController {
    * GET /users/:id/stats
    * Public — order counts and rating summary.
    */
+  @Public()
   @Get(':id/stats')
   getStats(@Param('id', ParseUUIDPipe) id: string) {
     return this.usersService.getStats(id);
@@ -53,7 +56,6 @@ export class UsersController {
    * Returns the full user row for the authenticated caller.
    */
 
-  @UseGuards(JwtAuthGuard)
   @Get('me')
   getMe(@CurrentUser('id') id: string) {
     return this.usersService.findById(id);
@@ -64,13 +66,11 @@ export class UsersController {
    * Updates fullName and/or bio.
    */
 
-  @UseGuards(JwtAuthGuard)
   @Patch('me')
   updateProfile(@CurrentUser('id') id: string, @Body() dto: UpdateProfileDto) {
     return this.usersService.updateProfile(id, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Patch('me/avatar')
   @ApiOperation({ summary: 'Upload or replace the current user avatar' })
   @ApiConsumes('multipart/form-data')
@@ -111,7 +111,7 @@ export class UsersController {
   /**
    * DELETE /users/me/avatar
    */
-  @UseGuards(JwtAuthGuard)
+
   @Delete('me/avatar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Remove the current user avatar' })
@@ -122,7 +122,7 @@ export class UsersController {
   /**
    * POST /users/me/promote-to-merchant
    */
-  @UseGuards(JwtAuthGuard)
+
   @Patch('me/promote-to-merchant')
   promoteToMerchant(@CurrentUser('id') id: string) {
     return this.usersService.requestPromoteToMerchant(id);

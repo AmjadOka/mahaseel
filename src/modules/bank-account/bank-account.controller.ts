@@ -19,11 +19,11 @@ import {
   UpdateBankAccountDto,
 } from './dto/create-bank-account.dto';
 import { CurrentUser } from 'src/common/decorators';
-import { User } from '../users/entities/user.entity';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/decorators';
 import { Role } from 'src/common/enums/role.enum';
+import type { AuthUser } from 'src/common/types';
 
 @ApiTags('bank-accounts')
 @ApiBearerAuth()
@@ -37,37 +37,37 @@ export class BankAccountController {
   @Get()
   @Roles(Role.MERCHANT)
   @ApiOperation({ summary: 'Get my bank accounts' })
-  getMyAccounts(@CurrentUser() user: User) {
-    return this.service.getMyAccounts(user.id);
+  getMyAccounts(@CurrentUser() user: AuthUser) {
+    return this.service.getMyAccounts(user.sub);
   }
 
   @Post()
   @Roles(Role.MERCHANT)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Add a bank account' })
-  addAccount(@CurrentUser() user: User, @Body() dto: CreateBankAccountDto) {
-    return this.service.addAccount(user.id, dto);
+  addAccount(@CurrentUser() user: AuthUser, @Body() dto: CreateBankAccountDto) {
+    return this.service.addAccount(user.sub, dto);
   }
 
   @Patch(':id')
   @Roles(Role.MERCHANT)
   @ApiOperation({ summary: 'Update a bank account' })
   updateAccount(
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateBankAccountDto,
   ) {
-    return this.service.updateAccount(user.id, id, dto);
+    return this.service.updateAccount(user.sub, id, dto);
   }
 
   @Patch(':id/default')
   @Roles(Role.MERCHANT)
   @ApiOperation({ summary: 'Set as default bank account' })
   setDefault(
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.service.setDefault(user.id, id);
+    return this.service.setDefault(user.sub, id);
   }
 
   @Delete(':id')
@@ -75,10 +75,10 @@ export class BankAccountController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Remove a bank account' })
   deleteAccount(
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.service.deleteAccount(user.id, id);
+    return this.service.deleteAccount(user.sub, id);
   }
 
   /* ── Admin routes ─────────────────────────────────── */

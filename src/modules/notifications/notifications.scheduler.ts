@@ -18,9 +18,9 @@ export class NotificationsScheduler implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    const existing = await this.notificationsQueue.getRepeatableJobs();
+    const existing = await this.notificationsQueue.getJobSchedulers();
     for (const job of existing) {
-      await this.notificationsQueue.removeRepeatableByKey(job.key);
+      await this.notificationsQueue.removeJobScheduler(job.key);
     }
 
     await this.notificationsQueue.add(

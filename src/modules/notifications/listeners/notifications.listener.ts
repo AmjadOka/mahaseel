@@ -1,15 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 
-import { Notification } from '../entities/notification.entity';
 import { NotificationCreatedEvent } from '../events/notification-created.event';
 import { NotificationChannel } from 'src/common/enums/notification.enum';
 import { NotificationsDispatcher } from '../services/notifications-dispatcher.service';
 import { NotificationsSseService } from '../services/notifications-sse.service';
-import { RedisService } from 'src/shared/redis/redis.service';
-import { NOTIFICATIONS_CK } from '../notifications.cache';
+import { NotificationsService } from '../services/notifications.service';
 
 export const NOTIFICATION_CREATED = 'notification.created';
 
@@ -18,11 +14,11 @@ export class NotificationCreatedListener {
   private readonly logger = new Logger(NotificationCreatedListener.name);
 
   constructor(
-    @InjectRepository(Notification)
-    private readonly notificationRepo: Repository<Notification>,
     private readonly dispatcher: NotificationsDispatcher,
     private readonly sseService: NotificationsSseService,
-    private readonly redis: RedisService,
+
+    @Inject(forwardRef(() => NotificationsService))
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   /**
@@ -30,28 +26,25 @@ export class NotificationCreatedListener {
    *
    * Responsibilities (in order):
    *  1. Delegate to the dispatcher — persist + channel dispatch.
-   *  2. Bust the Redis unread cache (count + list).
+   *  2. Bust the Redis unread cache then re-warm it via countUnread().
    *  3. Push an SSE event to any open browser tabs (IN_APP channel only).
    */
   @OnEvent(NOTIFICATION_CREATED, { async: true })
   async handle(event: NotificationCreatedEvent): Promise<void> {
     // ── 1. Persist + channel dispatch ────────────────────────────────────────
-    // Dispatcher owns persistence — one save, guaranteed.
     const notification = await this.dispatcher.dispatch(event);
 
-    // ── 2. Bust Redis unread cache ────────────────────────────────────────────
-    await Promise.all([
-      this.redis.del(NOTIFICATIONS_CK.unread(event.userId)),
-      this.redis.del(NOTIFICATIONS_CK.count(event.userId)),
-    ]);
+    // ── 2. Bust + re-warm unread cache ────────────────────────────────────────
+    // bustUnread() is private in NotificationsService — markAsRead() already
+    // calls it internally. For the new-notification path we bust manually then
+    // call countUnread() which: cache miss → DB query → re-caches the fresh count.
+    await this.notificationsService.bustUnreadForUser(event.userId);
 
     // ── 3. Push SSE (IN_APP channel only) ─────────────────────────────────────
     if (!event.channels.includes(NotificationChannel.IN_APP)) return;
 
-    // Fresh unread count from DB — cache was just busted above
-    const count = await this.notificationRepo.count({
-      where: { userId: event.userId, isRead: false },
-    });
+    // countUnread() re-warms the cache as a side effect — no extra DB call needed
+    const count = await this.notificationsService.countUnread(event.userId);
 
     this.sseService.push(event.userId, {
       count,

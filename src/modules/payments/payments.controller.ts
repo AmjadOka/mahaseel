@@ -10,6 +10,7 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
 import {
@@ -23,7 +24,6 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser, Roles, Public } from '../../common/decorators';
 import { Role } from 'src/common/enums/role.enum';
-import { User } from '../users/entities/user.entity';
 import type { AuthUser } from 'src/common/types';
 
 @ApiTags('payments')
@@ -36,13 +36,16 @@ export class PaymentsController {
   @Get()
   @Roles(Role.BUYER)
   @ApiOperation({ summary: 'List buyer payments' })
-  getBuyerPayments(@CurrentUser() user: User) {
-    return this.paymentsService.getBuyerPayments(user.id);
+  getBuyerPayments(@CurrentUser() user: AuthUser) {
+    return this.paymentsService.getBuyerPayments(user.sub);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get payment detail' })
-  getPaymentDetail(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  getPaymentDetail(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.paymentsService.getPaymentDetail(id, user.sub);
   }
 
@@ -53,10 +56,10 @@ export class PaymentsController {
       'Initiate payment for accepted order (redirects to stripe checkout)',
   })
   initiatePayment(
-    @Param('orderId') orderId: string,
-    @CurrentUser() user: User,
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @CurrentUser() user: AuthUser,
   ) {
-    return this.paymentsService.initiatePayment(orderId, user.id);
+    return this.paymentsService.initiatePayment(orderId, user.sub);
   }
 
   @Post('webhook')
@@ -67,7 +70,7 @@ export class PaymentsController {
     @Req() req: RawBodyRequest<Request>,
     @Headers('stripe-signature') signature: string,
   ) {
-    const rawBody = req.rawBody?.toString('utf-8') || JSON.stringify(req.body);
+    const rawBody = req.rawBody?.toString('utf-8');
 
     if (!rawBody) {
       throw new BadRequestException('Missing raw body');

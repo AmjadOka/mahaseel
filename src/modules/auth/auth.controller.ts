@@ -225,7 +225,8 @@ export class AuthController {
       ttl: 180_000,
     },
   })
-  verifyResetCode(@Body('email') email: string, @Body('code') code: string) {
+  verifyResetCode(@Body() dto: VerifyEmailDto) {
+    const { email, code } = dto;
     return this.resetPasswordService.verifyResetCode(email, code);
   }
 

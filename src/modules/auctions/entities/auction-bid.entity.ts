@@ -10,11 +10,7 @@ import {
 import { BidStatus } from 'src/common/enums/bid.enum';
 import { User } from '../../users/entities/user.entity';
 import { Product } from '../../products/entities/product.entity';
-
-const decimalTransformer = {
-  to: (v: number) => v,
-  from: (v: string) => parseFloat(v),
-};
+import { DecimalTransformer } from 'src/database/transformers/decimal.transformer';
 
 @Entity('auction_bids')
 export class AuctionBid {
@@ -31,7 +27,7 @@ export class AuctionBid {
     type: 'decimal',
     precision: 12,
     scale: 2,
-    transformer: decimalTransformer,
+    transformer: new DecimalTransformer(),
   })
   amount: number;
 
@@ -41,7 +37,12 @@ export class AuctionBid {
   @Column({ name: 'is_winning', default: false })
   isWinning: boolean;
 
-  @Column({ name: 'ip_address', type: 'varchar', nullable: true })
+  @Column({
+    name: 'ip_address',
+    type: 'varchar',
+    nullable: true,
+    select: false,
+  })
   ipAddress: string;
 
   @CreateDateColumn({ name: 'created_at' })

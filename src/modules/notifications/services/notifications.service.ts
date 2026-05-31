@@ -27,50 +27,30 @@ export class NotificationsService {
 
   // ─── Core notify ──────────────────────────────────────────────────────────
 
-  /**
-   * Single entry point for all notifications across the app.
-   *
-   * Emits a `notification.created` event which the listener picks up to:
-   *  - persist the row (via dispatcher)
-   *  - dispatch to each channel (IN_APP WebSocket, EMAIL, SMS)
-   *  - push SSE to open browser tabs
-   *  - bust the Redis unread cache
-   *
-   * Default channels: [IN_APP] — pass `channels` to add EMAIL or SMS.
-   */
   async notify(
     userId: string,
     payload: {
       type: NotificationType;
-
       title: string;
       body: string;
-
       titleAr?: string;
       bodyAr?: string;
-
       priority?: NotificationPriority;
       channels?: NotificationChannel[];
-
       referenceType?: string;
       referenceId?: string;
-
       data?: Record<string, any>;
     },
   ): Promise<void> {
     const event = new NotificationCreatedEvent({
       userId,
       type: payload.type,
-
       title: payload.title,
       body: payload.body,
-
       titleAr: payload.titleAr,
       bodyAr: payload.bodyAr,
-
       priority: payload.priority ?? NotificationPriority.NORMAL,
       channels: payload.channels ?? [NotificationChannel.IN_APP],
-
       data: {
         ...(payload.data ?? {}),
         ...(payload.referenceType
@@ -88,9 +68,6 @@ export class NotificationsService {
   }
 
   // ─── Typed convenience wrappers ───────────────────────────────────────────
-  //
-  // Keep call sites clean — raw strings never leak into other services.
-  // Add new wrappers here as the domain grows.
 
   async notifyWithdrawalCompleted(params: {
     userId: string;
@@ -103,7 +80,7 @@ export class NotificationsService {
       title: 'Withdrawal completed',
       body: `${params.amount} transferred successfully`,
       titleAr: 'تم التحويل',
-      bodyAr: `تم تحويل ${params.amount}  بنجاح`,
+      bodyAr: `تم تحويل ${params.amount} بنجاح`,
       referenceType: 'withdrawal',
       referenceId: params.withdrawalId,
       channels: params.userEmail
@@ -126,7 +103,7 @@ export class NotificationsService {
       title: 'Withdrawal request submitted',
       body: `Your withdrawal request of ${params.amount} SAR is under review`,
       titleAr: 'تم تقديم طلب السحب',
-      bodyAr: `تم استلام طلب سحب بقيمة ${params.amount}  وهو قيد المراجعة`,
+      bodyAr: `تم استلام طلب سحب بقيمة ${params.amount} وهو قيد المراجعة`,
       referenceType: 'withdrawal',
       referenceId: params.withdrawalId,
       data: { amount: params.amount },
@@ -160,12 +137,9 @@ export class NotificationsService {
 
   // ─── Read / CRUD ──────────────────────────────────────────────────────────
 
-  async getAll(
-    userId: string,
-    page = 1,
-    limit = 20,
-  ): Promise<{ data: Notification[]; total: number }> {
-    const cacheKey = NOTIFICATIONS_CK.all(userId, page, limit);
+  async getAll(userId: string, page = 1, limit = 20) {
+    const version = await this.getVersion(NOTIFICATIONS_CK.allVersion(userId));
+    const cacheKey = NOTIFICATIONS_CK.all(userId, version, page, limit);
 
     const cached = await this.redis.get(cacheKey);
     if (cached)
@@ -187,13 +161,14 @@ export class NotificationsService {
     return result;
   }
 
-  async getUnread(userId: string): Promise<Notification[]> {
+  async getUnread(userId: string, limit = 50): Promise<Notification[]> {
     const cached = await this.redis.get(NOTIFICATIONS_CK.unread(userId));
     if (cached) return JSON.parse(cached) as Notification[];
 
     const notifications = await this.notificationRepo.find({
       where: { userId, isRead: false },
       order: { createdAt: 'DESC' },
+      take: limit,
     });
 
     await this.redis.set(
@@ -230,7 +205,8 @@ export class NotificationsService {
     notification.isRead = true;
     notification.readAt = new Date();
     const saved = await this.notificationRepo.save(notification);
-    await this.bustUnread(userId);
+
+    await this.bustUnreadForUser(userId); // ← replaces old bustUnread()
     return saved;
   }
 
@@ -239,7 +215,8 @@ export class NotificationsService {
       { userId, isRead: false },
       { isRead: true, readAt: new Date() },
     );
-    await this.bustUnread(userId);
+
+    await this.bustUnreadForUser(userId); // ← replaces old bustUnread()
   }
 
   async cleanupOldNotifications(daysToKeep = 30): Promise<void> {
@@ -258,10 +235,34 @@ export class NotificationsService {
 
   // ─── Cache helpers ────────────────────────────────────────────────────────
 
-  private async bustUnread(userId: string): Promise<void> {
+  /**
+   * Busts all user-scoped notification caches in one shot:
+   * - unread list
+   * - unread count
+   * - all paginated pages (via version bump — orphaned keys expire naturally)
+   *
+   * Called by:
+   *  - markAsRead / markAllAsRead (read state changed)
+   *  - NotificationCreatedListener (new notification added)
+   */
+  async bustUnreadForUser(userId: string): Promise<void> {
+    const currentVersion = await this.getVersion(
+      NOTIFICATIONS_CK.allVersion(userId),
+    );
+
     await Promise.all([
       this.redis.del(NOTIFICATIONS_CK.unread(userId)),
       this.redis.del(NOTIFICATIONS_CK.count(userId)),
+      this.redis.set(
+        NOTIFICATIONS_CK.allVersion(userId),
+        String(currentVersion + 1),
+        NOTIFICATIONS_TTL.version,
+      ),
     ]);
+  }
+
+  private async getVersion(key: string): Promise<number> {
+    const v = await this.redis.get(key);
+    return v ? parseInt(v, 10) : 0;
   }
 }
