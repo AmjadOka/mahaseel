@@ -36,7 +36,7 @@ export class User {
   email: string;
 
   @Column({ unique: true, length: 20, nullable: true, type: 'varchar' })
-  phone: string | null;
+  phone: string;
 
   @Column({ name: 'full_name', length: 100, nullable: true, type: 'varchar' })
   fullName: string | null;

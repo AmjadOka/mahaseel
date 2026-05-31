@@ -56,13 +56,6 @@ export class AdminUsersController {
     return this.usersService.getStats();
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: '[Admin] Get full user profile with relations' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  getUser(@Param('id', ParseUUIDPipe) id: string) {
-    return this.usersService.getUser(id);
-  }
-
   @Get('pending-merchants')
   @ApiOperation({
     summary: '[Admin] List users with pending merchant role requests',
@@ -122,5 +115,12 @@ export class AdminUsersController {
     @Body() notes?: string,
   ) {
     return this.usersService.rejectPromotion(id, admin.sub, notes);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: '[Admin] Get full user profile with relations' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  getUser(@Param('id', ParseUUIDPipe) id: string) {
+    return this.usersService.getUser(id);
   }
 }

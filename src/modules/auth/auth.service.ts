@@ -130,6 +130,7 @@ export class AuthService {
       user.role,
       user.email,
       user.tokenVersion,
+      user.phone,
     );
 
     user.refreshTokenHash = this.tokenService.hashToken(tokens.refreshToken);
@@ -197,6 +198,7 @@ export class AuthService {
       .where('user.email = :email', { email: dto.email })
       .getOne();
 
+    console.log(user);
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
     // Google-only account — no password set yet
@@ -223,6 +225,7 @@ export class AuthService {
       user.role,
       user.email,
       user.tokenVersion,
+      user.phone,
     );
 
     user.refreshTokenHash = this.tokenService.hashToken(tokens.refreshToken);
@@ -296,7 +299,7 @@ export class AuthService {
         profileImage: profile.photos?.[0]?.value ?? undefined,
         googleId: profile.id,
         password: null,
-        phone: null,
+        phone: undefined,
         role: Role.BUYER,
         isActive: true,
         isVerified: true,
@@ -342,6 +345,7 @@ export class AuthService {
       user.role,
       user.email,
       user.tokenVersion,
+      user.phone,
     );
 
     user.refreshTokenHash = this.tokenService.hashToken(tokens.refreshToken);
@@ -398,6 +402,7 @@ export class AuthService {
       user.role,
       user.email,
       user.tokenVersion,
+      user.phone,
     );
 
     user.refreshTokenHash = this.tokenService.hashToken(tokens.refreshToken);

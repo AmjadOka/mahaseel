@@ -17,6 +17,7 @@ export class TokenService {
     role: string,
     email: string,
     tokenVersion: number,
+    phone: string,
   ) {
     const accessJti = uuid();
     const refreshJti = uuid();
@@ -30,6 +31,7 @@ export class TokenService {
           type: 'access',
           tokenVersion,
           jti: accessJti,
+          phone,
         },
         {
           secret: this.config.getOrThrow<string>('jwt.accessSecret'),
@@ -46,6 +48,7 @@ export class TokenService {
           type: 'refresh',
           tokenVersion,
           jti: refreshJti,
+          phone,
         },
         {
           secret: this.config.getOrThrow<string>('jwt.refreshSecret'),

@@ -7,16 +7,18 @@
 3. [Tech Stack](#3-tech-stack)
 4. [Infrastructure Dependencies](#4-infrastructure-dependencies)
 5. [Module Breakdown](#5-module-breakdown)
-6. [Authentication & Authorization](#6-authentication--authorization)
-7. [API Reference](#7-api-reference)
-8. [Data Flow](#8-data-flow)
-9. [Caching Strategy](#9-caching-strategy)
-10. [Job Queues & Schedulers](#10-job-queues--schedulers)
-11. [Notification System](#11-notification-system)
-12. [File Uploads & Media](#12-file-uploads--media)
-13. [Payment Flow](#13-payment-flow)
-14. [Security](#14-security)
-15. [Environment Variables](#15-environment-variables)
+6. [Admin Module](#6-admin-module)
+7. [Authentication & Authorization](#7-authentication--authorization)
+8. [API Reference](#8-api-reference)
+9. [Admin API Reference](#9-admin-api-reference)
+10. [Data Flow](#10-data-flow)
+11. [Caching Strategy](#11-caching-strategy)
+12. [Job Queues & Schedulers](#12-job-queues--schedulers)
+13. [Notification System](#13-notification-system)
+14. [File Uploads & Media](#14-file-uploads--media)
+15. [Payment Flow](#15-payment-flow)
+16. [Security](#16-security)
+17. [Environment Variables](#18-environment-variables)
 
 ---
 
@@ -48,15 +50,18 @@
 ┌─────────────────────────────────────────────────────────┐
 │                     NestJS Application                  │
 │                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐  │
-│  │   Auth   │  │  Users   │  │  Farms   │  │Products│  │
-│  └──────────┘  └──────────┘  └──────────┘  └────────┘  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐  │
-│  │  Orders  │  │ Auctions │  │ Payments │  │ Wallet │  │
-│  └──────────┘  └──────────┘  └──────────┘  └────────┘  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐  │
-│  │Notif.    │  │ Ratings  │  │Categories│  │  Bank  │  │
-│  └──────────┘  └──────────┘  └──────────┘  └────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐   │
+│  │   Auth   │  │  Users   │  │  Farms   │  │Products│   │
+│  └──────────┘  └──────────┘  └──────────┘  └────────┘   │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐   │
+│  │  Orders  │  │ Auctions │  │ Payments │  │ Wallet │   │
+│  └──────────┘  └──────────┘  └──────────┘  └────────┘   │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐   │
+│  │Notif.    │  │ Ratings  │  │Categories│  │  Bank  │   │
+│  └──────────┘  └──────────┘  └──────────┘  └────────┘   │
+│                       ┌──────────┐                      │
+│                       │  ADMIN   │                      │
+│                       └──────────┘                      │
 │                                                         │
 │  ┌─────────────────────────────────────────────────┐    │
 │  │               Shared Infrastructure             │    │
@@ -225,7 +230,115 @@ See [Section 11](#11-notification-system) for full detail.
 
 ---
 
-## 6. Authentication & Authorization
+## 6. Admin Module
+
+The Admin module is a self-contained NestJS module at `src/modules/admin/` with nine sub-controllers, each backed by a dedicated service. Every endpoint is guarded by `JwtAuthGuard` + `AdminGuard` — requiring a valid JWT with `role = ADMIN` **and** the `x-admin-secret` header.
+
+### Sub-modules
+
+| Controller                     | Base Path              | Responsibility                                  |
+| ------------------------------ | ---------------------- | ----------------------------------------------- |
+| `AdminDashboardController`     | `/admin/dashboard`     | Live platform stats snapshot                    |
+| `AdminUsersController`         | `/admin/users`         | User management, suspension, merchant promotion |
+| `AdminFarmsController`         | `/admin/farms`         | Farm approval workflow, suspension              |
+| `AdminProductsController`      | `/admin/products`      | Product moderation, deactivation                |
+| `AdminOrdersController`        | `/admin/orders`        | Order oversight, force actions                  |
+| `AdminWithdrawalsController`   | `/admin/withdrawals`   | Withdrawal approval / rejection                 |
+| `AdminNotificationsController` | `/admin/notifications` | Broadcast notifications                         |
+| `AdminReportsController`       | `/admin/reports`       | Revenue reports, merchant rankings              |
+| `AdminAuditController`         | `/admin/audit`         | Immutable audit log                             |
+
+### Dashboard
+
+Single `GET /admin/dashboard` endpoint returns a live snapshot:
+
+- Total users by role, active/suspended counts
+- Order volume and revenue (today / this week / this month)
+- Pending farms, pending withdrawals, open disputes
+- Platform fee collected
+
+### User Management
+
+Full lifecycle control over all accounts:
+
+- List with role/status filters + pagination
+- View full profile with all relations
+- Suspend with reason → notifies user, logs action
+- Reinstate → notifies user, logs action
+- Approve merchant promotion → role upgraded, `promotionStatus = APPROVED`
+- Reject merchant promotion → `promotionStatus = REJECTED`, notifies user
+
+### Farm Approval Workflow
+
+```
+Merchant submits farm (status = PENDING)
+  └─ Admin reviews
+       ├─ APPROVE → status = APPROVED, approvedBy + approvedAt set, owner notified
+       ├─ REJECT  → status = REJECTED, rejectionReason saved, owner notified
+       └─ SUSPEND → status = SUSPENDED, reason saved, owner notified
+                      └─ UNSUSPEND → status = APPROVED, owner notified
+```
+
+### Product Moderation
+
+- List all products across all merchants with `status` and `saleMethod` filters
+- View live auctions specifically
+- Deactivate with reason → product hidden from market, merchant notified
+- Reactivate → product restored to `ACTIVE`, merchant notified
+
+### Order Oversight
+
+- Full order list with `status` and date-range filters
+- Open disputes — orders stuck in `AWAITING_PAYMENT` beyond 24h
+- `force-cancel` — admin cancels a disputed/stuck order, both parties notified
+- `force-complete` — admin marks a delivered order as completed when buyer is unresponsive, wallet credited
+
+### Withdrawal Processing
+
+Two explicit endpoints — approve and reject are separate routes to prevent accidental misuse:
+
+```
+PUT /admin/withdrawals/:id/accept  → completeWithdrawal() — marks COMPLETED, notifies merchant
+PUT /admin/withdrawals/:id/reject  → rejectWithdrawal()   — refunds to availableBalance, notifies merchant
+```
+
+Both are guarded with `pessimistic_write` locks in the wallet service to prevent double-processing.
+
+### Broadcast Notifications
+
+Send a notification to:
+
+- A list of specific `userIds`
+- All users of a given `role` (BUYER / MERCHANT)
+- Everyone on the platform
+
+Returns a summary: `{ sent: number, failed: number, targets: number }`.
+
+### Reports
+
+| Endpoint                               | Description                                               |
+| -------------------------------------- | --------------------------------------------------------- |
+| `GET /admin/reports/revenue`           | Daily revenue grouped by date — filterable by `from`/`to` |
+| `GET /admin/reports/revenue/monthly`   | Monthly totals for a given `year`                         |
+| `GET /admin/reports/merchants/top`     | Top N merchants by revenue in a date range                |
+| `GET /admin/reports/revenue/breakdown` | Fixed-price vs auction revenue split                      |
+
+### Audit Log
+
+Every admin action is recorded in an `audit_logs` table:
+
+- `adminId` — who performed the action
+- `action` — e.g. `APPROVE_FARM`, `SUSPEND_USER`, `COMPLETE_WITHDRAWAL`
+- `resourceType` + `resourceId` — what was acted on
+- `before` / `after` — JSON snapshots of state change
+- `createdAt` — immutable timestamp
+
+Query the log at `GET /admin/audit` with filters: `adminId`, `resourceType`, `action`, date range.  
+Full resource history: `GET /admin/audit/:resourceType/:resourceId`.
+
+---
+
+## 7. Authentication & Authorization
 
 ### Token Architecture
 
@@ -279,7 +392,7 @@ Browser → GET /auth/google
 
 ---
 
-## 7. API Reference
+## 8. API Reference
 
 ### Auth — `/auth`
 
@@ -372,7 +485,118 @@ Browser → GET /auth/google
 
 ---
 
-## 8. Data Flow
+## 9. Admin API Reference
+
+All endpoints require `Authorization: Bearer <token>` + `x-admin-secret: <secret>`.
+
+### Dashboard — `/admin/dashboard`
+
+| Method | Endpoint           | Description                  |
+| ------ | ------------------ | ---------------------------- |
+| GET    | `/admin/dashboard` | Live platform stats snapshot |
+
+### Users — `/admin/users`
+
+| Method | Endpoint                           | Description                                  |
+| ------ | ---------------------------------- | -------------------------------------------- |
+| GET    | `/admin/users`                     | List all users — filter by `role`, paginated |
+| GET    | `/admin/users/stats`               | User counts grouped by role and status       |
+| GET    | `/admin/users/pending-merchants`   | Users with pending promotion requests        |
+| GET    | `/admin/users/:id`                 | Full user profile with relations             |
+| PUT    | `/admin/users/:id/suspend`         | Suspend account — requires `reason`          |
+| PUT    | `/admin/users/:id/reinstate`       | Lift suspension                              |
+| PUT    | `/admin/users/:id/make-merchant`   | Approve merchant promotion                   |
+| PUT    | `/admin/users/:id/reject-merchant` | Reject merchant promotion                    |
+
+> ⚠️ `GET /admin/users/pending-merchants` must be defined **before** `GET /admin/users/:id` in the controller. NestJS route matching is positional — a literal segment must appear before a parameterized one or it will be swallowed as a UUID param.
+
+### Farms — `/admin/farms`
+
+| Method | Endpoint                     | Description                               |
+| ------ | ---------------------------- | ----------------------------------------- |
+| GET    | `/admin/farms`               | All farms — filter by `status`, `search`  |
+| GET    | `/admin/farms/pending`       | Farms awaiting approval                   |
+| GET    | `/admin/farms/stats`         | Counts by status                          |
+| GET    | `/admin/farms/:id`           | Full farm detail with relations           |
+| PUT    | `/admin/farms/:id/approve`   | Approve farm                              |
+| PUT    | `/admin/farms/:id/reject`    | Reject farm — requires `reason`           |
+| PUT    | `/admin/farms/:id/suspend`   | Suspend approved farm — requires `reason` |
+| PUT    | `/admin/farms/:id/unsuspend` | Lift suspension                           |
+| DELETE | `/admin/farms/:id`           | Hard delete — irreversible                |
+
+### Products — `/admin/products`
+
+| Method | Endpoint                         | Description                                     |
+| ------ | -------------------------------- | ----------------------------------------------- |
+| GET    | `/admin/products`                | All products — filter by `status`, `saleMethod` |
+| GET    | `/admin/products/auctions/live`  | Currently live auctions                         |
+| GET    | `/admin/products/stats`          | Counts by status and sale method                |
+| GET    | `/admin/products/:id`            | Full product with relations                     |
+| PUT    | `/admin/products/:id/deactivate` | Deactivate — requires `reason`                  |
+| PUT    | `/admin/products/:id/reactivate` | Restore to active                               |
+
+### Orders — `/admin/orders`
+
+| Method | Endpoint                           | Description                                   |
+| ------ | ---------------------------------- | --------------------------------------------- |
+| GET    | `/admin/orders`                    | All orders — filter by `status`, `from`, `to` |
+| GET    | `/admin/orders/disputes`           | Unpaid orders stuck > 24h                     |
+| GET    | `/admin/orders/stats`              | Counts and revenue by status                  |
+| GET    | `/admin/orders/:id`                | Full order detail                             |
+| PUT    | `/admin/orders/:id/force-cancel`   | Force cancel — notifies both parties          |
+| PUT    | `/admin/orders/:id/force-complete` | Force complete — credits merchant wallet      |
+
+### Withdrawals — `/admin/withdrawals`
+
+| Method | Endpoint                        | Description                                  |
+| ------ | ------------------------------- | -------------------------------------------- |
+| GET    | `/admin/withdrawals`            | All withdrawals — filter by `status`         |
+| GET    | `/admin/withdrawals/pending`    | Pending only                                 |
+| GET    | `/admin/withdrawals/stats`      | Counts and amounts by status                 |
+| GET    | `/admin/withdrawals/:id`        | Single withdrawal detail                     |
+| PUT    | `/admin/withdrawals/:id/accept` | Approve — marks COMPLETED, notifies merchant |
+| PUT    | `/admin/withdrawals/:id/reject` | Reject — refunds balance, notifies merchant  |
+
+### Notifications — `/admin/notifications`
+
+| Method | Endpoint                         | Description                     |
+| ------ | -------------------------------- | ------------------------------- |
+| POST   | `/admin/notifications/broadcast` | Broadcast to users / role / all |
+
+**BroadcastNotificationDto:**
+
+```typescript
+{
+  userIds?: string[];       // specific users
+  role?: Role;              // all users of a role
+  all?: boolean;            // everyone
+  title: string;
+  body: string;
+  titleAr?: string;
+  bodyAr?: string;
+  type: NotificationType;
+}
+```
+
+### Reports — `/admin/reports`
+
+| Method | Endpoint                           | Query Params           | Description              |
+| ------ | ---------------------------------- | ---------------------- | ------------------------ |
+| GET    | `/admin/reports/revenue`           | `from`, `to`           | Daily revenue by date    |
+| GET    | `/admin/reports/revenue/monthly`   | `year?`                | Monthly totals           |
+| GET    | `/admin/reports/merchants/top`     | `from`, `to`, `limit?` | Top merchants by revenue |
+| GET    | `/admin/reports/revenue/breakdown` | `from`, `to`           | Fixed vs auction split   |
+
+### Audit Log — `/admin/audit`
+
+| Method | Endpoint                                 | Query Params                                           | Description                   |
+| ------ | ---------------------------------------- | ------------------------------------------------------ | ----------------------------- |
+| GET    | `/admin/audit`                           | `adminId?`, `resourceType?`, `action?`, `from?`, `to?` | Paginated audit log           |
+| GET    | `/admin/audit/:resourceType/:resourceId` | —                                                      | Full history for one resource |
+
+---
+
+## 10. Data Flow
 
 ### Order → Payment → Wallet
 
@@ -424,7 +648,7 @@ Auction end (scheduled job or merchant accept)
 
 ---
 
-## 9. Caching Strategy
+## 11. Caching Strategy
 
 All caches use Redis with explicit TTLs and targeted invalidation. No global cache flush is ever used.
 
@@ -447,7 +671,7 @@ All caches use Redis with explicit TTLs and targeted invalidation. No global cac
 
 ---
 
-## 10. Job Queues & Schedulers
+## 12. Job Queues & Schedulers
 
 ### Payment Queue (`payment-queue`)
 
@@ -461,13 +685,11 @@ All caches use Redis with explicit TTLs and targeted invalidation. No global cac
 | ---------------------- | ----------- | -------------------------------------------- |
 | `notification-cleanup` | Sunday 3 AM | Delete read notifications older than 30 days |
 
-### Auctions queue (`auctions-queue`) |runs every 1 minute|
-
 All schedulers use `upsertJobScheduler` on `onModuleInit` — existing schedules are cleared first to prevent duplicates across restarts.
 
 ---
 
-## 11. Notification System
+## 13. Notification System
 
 ### Architecture
 
@@ -515,7 +737,7 @@ Each user has a single `Subject<MessageEvent>` shared across tabs. Reference cou
 
 ---
 
-## 12. File Uploads & Media
+## 14. File Uploads & Media
 
 All uploads go through Cloudinary. The `UploadService` handles single and multi-file uploads, replacement (delete old + upload new), and deletion.
 
@@ -531,7 +753,7 @@ Files are streamed through memory (never written to disk) using Fastify's multip
 
 ---
 
-## 13. Payment Flow
+## 15. Payment Flow
 
 ### Stripe Integration
 
@@ -559,7 +781,7 @@ A BullMQ job runs every 30 minutes. Orders with a `PENDING` payment older than 2
 
 ---
 
-## 14. Security
+## 16. Security
 
 ### Authentication
 
@@ -603,7 +825,9 @@ All auth endpoints are throttled via `@Throttle`:
 
 ---
 
-## 15. Environment Variables
+---
+
+## 17. Environment Variables
 
 ```env
 # App
