@@ -32,7 +32,6 @@ export class AdminNotificationsService {
    *   2. All users of a role (dto.role is set, dto.userIds is not)
    *   3. Every active user   (neither is set)
    *
-   * Uses Promise.allSettled so one bad FCM token doesn't abort the batch.
    */
   async broadcast(
     dto: BroadcastNotificationDto,

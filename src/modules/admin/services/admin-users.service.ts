@@ -84,7 +84,7 @@ export class AdminUsersService {
   async getUser(id: string): Promise<User> {
     const user = await this.usersRepo.findOne({
       where: { id, isDeleted: false },
-      relations: ['farms', 'buyerOrders', 'merchantOrders', 'fcmTokens'],
+      relations: ['farms', 'buyerOrders', 'merchantOrders', 'Tokens'],
     });
     if (!user) throw new NotFoundException('User not found');
     return user;

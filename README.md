@@ -1,1727 +1,666 @@
-# 🌾 Marketplace API Documentation
+# Mahaseel — Technical Documentation
 
-**Base URL:** `{BASE_URL}/api`  
-**API Version:** v1.0.0
+## Table of Contents
+
+1. [System Overview](#1-system-overview)
+2. [Architecture](#2-architecture)
+3. [Tech Stack](#3-tech-stack)
+4. [Infrastructure Dependencies](#4-infrastructure-dependencies)
+5. [Module Breakdown](#5-module-breakdown)
+6. [Authentication & Authorization](#6-authentication--authorization)
+7. [API Reference](#7-api-reference)
+8. [Data Flow](#8-data-flow)
+9. [Caching Strategy](#9-caching-strategy)
+10. [Job Queues & Schedulers](#10-job-queues--schedulers)
+11. [Notification System](#11-notification-system)
+12. [File Uploads & Media](#12-file-uploads--media)
+13. [Payment Flow](#13-payment-flow)
+14. [Security](#14-security)
+15. [Environment Variables](#15-environment-variables)
 
 ---
 
-## 📑 Quick Navigation
+## 1. System Overview
 
-1. [Type Definitions](#-type-definitions) - Enums, Interfaces, DTOs
-2. [Authentication](#-authentication-endpoints)
-3. [Users](#-users-endpoints)
-4. [Categories](#-categories-endpoints)
-5. [Products](#-products-endpoints)
-6. [Farms](#-farms-endpoints)
-7. [Orders](#-orders-endpoints)
-8. [Wallet](#-wallet-endpoints)
-9. [Auctions](#-auctions-endpoints)
-10. [Ratings](#-ratings-endpoints)
-11. [Notifications](#-notifications-endpoints)
+**Mahaseel** (محصول) is a B2C agricultural marketplace platform connecting buyers directly with local farmers and merchants across Palestine and the surrounding region. The platform supports two primary sale models — fixed-price orders and live auctions — with an integrated wallet, payout, and real-time notification system.
+
+### Core Roles
+
+| Role       | Description                                                             |
+| ---------- | ----------------------------------------------------------------------- |
+| `BUYER`    | Browse products, place orders, bid in auctions, rate merchants          |
+| `MERCHANT` | List products, manage farms, accept orders, request payouts             |
+| `ADMIN`    | Approve farms, manage categories, process withdrawals, moderate ratings |
+
+### Key Capabilities
+
+- **Dual sale model** — fixed-price purchases and real-time sealed-bid auctions
+- **Merchant wallet** — earnings held in a pending balance, released after buyer confirms delivery, withdrawable to a bank account
+- **Multi-channel notifications** — in-app (WebSocket + SSE), email, SMS (planned)
+- **Google OAuth** — alongside email/password with full token lifecycle management
+- **Promotion flow** — buyers can request promotion to merchant, pending admin approval
 
 ---
 
-## 🔑 Type Definitions
+## 2. Architecture
 
-### Core Interfaces
+```
+┌─────────────────────────────────────────────────────────┐
+│                     NestJS Application                  │
+│                                                         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐  │
+│  │   Auth   │  │  Users   │  │  Farms   │  │Products│  │
+│  └──────────┘  └──────────┘  └──────────┘  └────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐  │
+│  │  Orders  │  │ Auctions │  │ Payments │  │ Wallet │  │
+│  └──────────┘  └──────────┘  └──────────┘  └────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐  │
+│  │Notif.    │  │ Ratings  │  │Categories│  │  Bank  │  │
+│  └──────────┘  └──────────┘  └──────────┘  └────────┘  │
+│                                                         │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │               Shared Infrastructure             │    │
+│  │   Redis · BullMQ · Cloudinary · Stripe · Mail   │    │
+│  └─────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────┘
+         │                │               │
+    PostgreSQL           Redis         Cloudinary
+```
+
+The application follows a **modular monolith** architecture — each domain is a self-contained NestJS module with its own entity, service, controller, and DTOs. Cross-module communication is done via service injection (synchronous) or EventEmitter2 events (async, fire-and-forget).
+
+---
+
+## 3. Tech Stack
+
+| Layer      | Technology                                           |
+| ---------- | ---------------------------------------------------- |
+| Framework  | NestJS (Fastify adapter)                             |
+| Language   | TypeScript                                           |
+| Database   | PostgreSQL via TypeORM                               |
+| Cache      | Redis via `ioredis`                                  |
+| Job Queues | BullMQ                                               |
+| Auth       | JWT (access + refresh) · Passport · Google OAuth 2.0 |
+| Payments   | Stripe Checkout                                      |
+| Media      | Cloudinary                                           |
+| Mail       | Nodemailer (SMTP)                                    |
+| Real-time  | Socket.io (WebSocket) · SSE (Server-Sent Events)     |
+| Validation | class-validator · class-transformer                  |
+| API Docs   | Swagger / OpenAPI                                    |
+
+---
+
+## 4. Infrastructure Dependencies
+
+| Service      | Purpose                                 | Required |
+| ------------ | --------------------------------------- | -------- |
+| PostgreSQL   | Primary data store                      | ✅       |
+| Redis        | Caching · BullMQ broker · JWT blacklist | ✅       |
+| Cloudinary   | Product / farm / avatar media storage   | ✅       |
+| Stripe       | Payment processing · Webhooks           | ✅       |
+| SMTP server  | Transactional email                     | ✅       |
+| Google OAuth | Social login                            | Optional |
+
+---
+
+## 5. Module Breakdown
+
+### Auth
+
+Handles the complete authentication lifecycle.
+
+- Email/password sign-up with email verification (6-digit OTP, 10-min TTL)
+- Sign-in returning `accessToken` (1d) + `refreshToken` (30d)
+- Token rotation on refresh
+- Google OAuth 2.0 — tokens set as `httpOnly` cookies, redirect to frontend
+- Logout (single device) — blacklists current access token in Redis (`bl:{jti}`)
+- Logout all — increments `tokenVersion` on the user, busts auth cache
+- Password reset — 3-step flow: send OTP → verify → change password
+- Set password — for OAuth users who want to add a password
+
+### Users
+
+- Self-service profile: `fullName`, `bio`, avatar (Cloudinary)
+- Public profile endpoint — safe fields only for unauthenticated callers
+- Per-user stats: order counts, rating averages (raw SQL, cached 5 min)
+- Promotion request: BUYER → MERCHANT (sets `promotionStatus = PENDING`)
+
+### Farms
+
+- Merchant-owned farm entities with media (images/videos via Cloudinary)
+- Admin approval workflow: `PENDING → APPROVED / REJECTED`
+- Soft-delete with cascade to products
+
+### Products
+
+Two sale methods, both on the same entity:
+
+| Field               | Fixed Price | Auction             |
+| ------------------- | ----------- | ------------------- |
+| `saleMethod`        | `FIXED`     | `AUCTION`           |
+| `fixedPrice`        | required    | —                   |
+| `auctionStartPrice` | —           | required            |
+| `auctionEndAt`      | —           | required            |
+| `currentBid`        | —           | updated on each bid |
+
+Product status flow: `DRAFT → ACTIVE → SOLD / EXPIRED`
+
+### Market (Public)
+
+- `GET /market` — paginated search with filters: `q`, `categoryId`, `saleMethod`, `priceMin`, `priceMax`, `location`, `unit`
+- `GET /market/:id` — public product detail
+- Backed by Redis version-key cache (2-min TTL, instant invalidation on mutation)
+
+### Orders
+
+Order status flow:
+
+```
+PENDING → ACCEPTED → IN_DELIVERY → DELIVERED → COMPLETED
+        ↘ REJECTED
+        ↘ CANCELLED (buyer, before acceptance)
+```
+
+On `ACCEPTED`: buyer phone revealed to merchant, payment link sent  
+On `COMPLETED`: platform fee deducted, net amount credited to merchant pending balance
+
+### Auctions
+
+- Buyers place bids — must exceed `currentBid` or `auctionStartPrice`
+- Bid withdrawal recalculates `currentBid` to next highest active bid
+- Merchant accepts a bid → auction closes early, wallet credited
+- IP address logged per bid (`select: false` — never returned to client)
+
+### Payments
+
+- Stripe Checkout session created on order acceptance
+- Webhook handler processes `checkout.session.completed`
+- BullMQ job cancels unpaid orders every 30 minutes
+- `Payment` entity tracks gateway ref, status, `paidAt`
+
+### Wallet
+
+Three-balance model:
+
+| Balance            | Description                                              |
+| ------------------ | -------------------------------------------------------- |
+| `pendingBalance`   | Funds held after order completion — not yet withdrawable |
+| `availableBalance` | Released funds — withdrawable                            |
+| `totalEarned`      | Cumulative lifetime earnings                             |
+
+All balance mutations use `pessimistic_write` locks inside transactions.
+
+### Bank Accounts
+
+- Merchants can save multiple bank accounts
+- One marked as `isDefault` at a time — atomic swap via transaction
+- Default auto-promoted when the active default is deleted
+- Used as target for withdrawal requests
+
+### Withdrawals
+
+- Merchant requests withdrawal against `availableBalance`
+- Admin approves → `COMPLETED` + notification + email
+- Admin rejects → refund to `availableBalance` + notification
+- All state transitions guarded with pessimistic locks to prevent double-processing
+
+### Categories
+
+- Hierarchical (parent → children, unlimited depth)
+- Admin-managed: CRUD, icon upload/removal, toggle active
+- Public read, no auth required
+- Slug auto-generated from `nameEn` if not provided
+
+### Ratings
+
+- Both buyer and merchant can rate after order completion (`@Unique(['orderId', 'reviewerId'])`)
+- Score 1–5 with DB-level `CHECK` constraint
+- Rating flags: users can report abusive ratings
+- Admin resolves flags: `REVIEWED / DISMISSED / REMOVED`
+- Removing a rating recalculates the user's `ratingAvg` and `ratingCount`
+
+### Notifications
+
+See [Section 11](#11-notification-system) for full detail.
+
+---
+
+## 6. Authentication & Authorization
+
+### Token Architecture
+
+```
+Access Token  — JWT, 1d TTL, signed with JWT_ACCESS_SECRET
+Refresh Token — JWT, 30d TTL, signed with JWT_REFRESH_SECRET, hashed in DB
+```
+
+Each token carries:
 
 ```typescript
-// Authenticated user from JWT payload
-interface AuthUser {
-  sub: string; // User ID
-  role: Role; // MERCHANT | BUYER | ADMIN
+{
+  sub: string; // userId
+  role: Role;
   email: string;
+  tokenVersion: number;
+  type: 'access' | 'refresh';
+  jti: string; // UUID, unique per token
 }
 ```
 
-### Enumerations
+### Validation Flow (JwtStrategy)
 
-#### Role
-
-```typescript
-enum Role {
-  MERCHANT = 'merchant',
-  BUYER = 'buyer',
-  ADMIN = 'admin',
-}
+```
+1. Extract Bearer token
+2. Check bl:{jti} in Redis → reject if blacklisted
+3. Check auth_user:{sub} in Redis → use cached user (60s TTL)
+4. DB fallback → verify isActive, isDeleted
+5. Validate tokenVersion matches payload
+6. Cache sanitized user for 60s
 ```
 
-#### Order & Delivery Status
+### Guards
 
-```typescript
-enum OrderStatus {
-  PENDING = 'PENDING', // Awaiting merchant acceptance
-  ACCEPTED = 'ACCEPTED', // Merchant accepted
-  REJECTED = 'REJECTED', // Merchant rejected
-  COMPLETED = 'COMPLETED', // Buyer confirmed delivery
-  CANCELLED = 'CANCELLED', // Buyer cancelled
-  REFUNDED = 'REFUNDED', // Payment refunded
-}
+| Guard             | Purpose                                             |
+| ----------------- | --------------------------------------------------- |
+| `JwtAuthGuard`    | Validates access token, populates `req.user`        |
+| `RolesGuard`      | Checks `@Roles()` decorator against `req.user.role` |
+| `AdminGuard`      | Role check + `x-admin-secret` header validation     |
+| `GoogleAuthGuard` | Passport Google OAuth strategy                      |
 
-enum DeliveryStatus {
-  PREPARING = 'PREPARING', // Order being prepared
-  READY_PICKUP = 'READY_PICKUP', // Ready for pickup
-  IN_DELIVERY = 'IN_DELIVERY', // In transit
-  DELIVERED = 'DELIVERED', // Delivered to buyer
-}
+### Google OAuth Flow
+
 ```
-
-#### Product & Auction Status
-
-```typescript
-enum ProductStatus {
-  DRAFT = 'draft', // Not published
-  PENDING_REVIEW = 'pending_review',
-  ACTIVE = 'active', // Listed
-  SOLD = 'sold',
-  EXPIRED = 'expired', // Auction/listing expired
-  REJECTED = 'rejected',
-  ARCHIVED = 'archived',
-}
-
-enum AuctionStatus {
-  SCHEDULED = 'scheduled',
-  ACTIVE = 'active',
-  ENDED = 'ended',
-  CANCELLED = 'cancelled',
-}
-
-enum BidStatus {
-  ACTIVE = 'active',
-  WITHDRAWN = 'withdrawn',
-  WON = 'won',
-  LOST = 'lost',
-}
-```
-
-#### Sale & Delivery Methods
-
-```typescript
-enum SaleMethod {
-  FIXED = 'fixed', // Fixed price
-  AUCTION = 'auction', // Auction-based
-}
-
-enum DeliveryMethod {
-  FROM_FARM = 'from_farm', // Buyer picks up
-  DRIVER = 'driver', // Merchant delivers
-}
-
-enum Unit {
-  KG = 'kg',
-  TON = 'ton',
-  HEAD = 'head', // For livestock
-  BOX = 'box',
-  PIECE = 'piece',
-}
-```
-
-#### Farm Status
-
-```typescript
-enum FarmStatus {
-  PENDING = 'pending', // Awaiting admin approval
-  APPROVED = 'approved',
-  REJECTED = 'rejected',
-}
-```
-
-#### Wallet & Withdrawal
-
-```typescript
-enum WithdrawalStatus {
-  PENDING = 'pending',
-  PROCESSING = 'processing',
-  COMPLETED = 'completed',
-  REJECTED = 'rejected',
-}
-
-enum WalletTransactionType {
-  CREDIT = 'credit',
-  DEBIT = 'debit',
-  HOLD = 'hold', // Escrow hold
-  RELEASE = 'release',
-}
-
-enum WalletTransactionReason {
-  ORDER_PAYMENT = 'order_payment',
-  ORDER_EARNING = 'order_earning',
-  ESCROW_HOLD = 'escrow_hold',
-  ESCROW_RELEASE = 'escrow_release',
-  WITHDRAWAL_REQUESTED = 'withdrawal_requested',
-  WITHDRAWAL_COMPLETED = 'withdrawal_completed',
-  WITHDRAWAL_REJECTED = 'withdrawal_rejected',
-  PLATFORM_FEE = 'platform_fee',
-  REFUND = 'refund',
-  ADMIN_ADJUSTMENT = 'admin_adjustment',
-}
-```
-
-#### Notifications
-
-```typescript
-enum NotificationType {
-  // Orders
-  ORDER_PLACED = 'order_placed',
-  ORDER_ACCEPTED = 'order_accepted',
-  ORDER_REJECTED = 'order_rejected',
-  ORDER_STATUS_CHANGED = 'order_status_changed',
-
-  // Auctions
-  BID_PLACED = 'bid_placed',
-  AUCTION_STARTED = 'auction_started',
-  AUCTION_ENDED = 'auction_ended',
-  AUCTION_WON = 'auction_won',
-  AUCTION_LOST = 'auction_lost',
-
-  // Payments
-  PAYMENT_REQUIRED = 'payment_required',
-  PAYMENT_RECEIVED = 'payment_received',
-  PAYMENT_FAILED = 'payment_failed',
-  REFUND_ISSUED = 'refund_issued',
-
-  // Withdrawals
-  WITHDRAWAL_REQUESTED = 'withdrawal_requested',
-  WITHDRAWAL_COMPLETED = 'withdrawal_completed',
-  WITHDRAWAL_REJECTED = 'withdrawal_rejected',
-
-  // Farms
-  FARM_APPROVED = 'farm_approved',
-  FARM_REJECTED = 'farm_rejected',
-
-  // Reviews
-  RATING_RECEIVED = 'rating_received',
-
-  // System
-  SYSTEM = 'system',
-}
-
-enum NotificationChannel {
-  IN_APP = 'in_app',
-  PUSH = 'push',
-  EMAIL = 'email',
-  SMS = 'sms',
-}
-
-enum NotificationPriority {
-  LOW = 'low',
-  NORMAL = 'normal',
-  HIGH = 'high',
-  CRITICAL = 'critical',
-}
-```
-
-#### Platform & Media
-
-```typescript
-enum Platform {
-  IOS = 'ios',
-  ANDROID = 'android',
-  WEB = 'web',
-}
-
-enum MediaType {
-  IMAGE = 'image',
-  VIDEO = 'video',
-}
+Browser → GET /auth/google
+        → Google consent screen
+        → GET /auth/google/callback
+        → tokens set as httpOnly cookies
+        → redirect to {FRONTEND_URL}/auth/success
 ```
 
 ---
 
-## 🔐 Authentication Endpoints
+## 7. API Reference
 
-### POST - Sign Up
+### Auth — `/auth`
 
-```http
-POST /auth/signup
-Content-Type: application/json
+| Method | Endpoint                 | Auth   | Description                    |
+| ------ | ------------------------ | ------ | ------------------------------ |
+| POST   | `/signup`                | Public | Register with email + password |
+| POST   | `/verify-email`          | Public | Verify 6-digit OTP             |
+| POST   | `/resend-verification`   | Public | Re-send verification OTP       |
+| POST   | `/signin`                | Public | Sign in, returns tokens        |
+| POST   | `/refresh`               | Public | Rotate tokens                  |
+| GET    | `/google`                | Public | Google OAuth redirect          |
+| GET    | `/google/callback`       | Public | OAuth callback                 |
+| POST   | `/set-password`          | JWT    | Set password for OAuth users   |
+| POST   | `/logout`                | JWT    | Blacklist current token        |
+| POST   | `/logout-all`            | JWT    | Invalidate all sessions        |
+| POST   | `/reset/send-code`       | Public | Send password reset OTP        |
+| POST   | `/reset/verify`          | Public | Verify reset OTP               |
+| POST   | `/reset/change-password` | Public | Set new password               |
+
+### Users — `/users`
+
+| Method | Endpoint                        | Auth   | Description                |
+| ------ | ------------------------------- | ------ | -------------------------- |
+| GET    | `/users/:id/profile`            | Public | Public profile             |
+| GET    | `/users/:id/stats`              | Public | Order + rating stats       |
+| GET    | `/users/me`                     | JWT    | Own full profile           |
+| PATCH  | `/users/me`                     | JWT    | Update name / bio          |
+| PATCH  | `/users/me/avatar`              | JWT    | Upload avatar              |
+| DELETE | `/users/me/avatar`              | JWT    | Remove avatar              |
+| PATCH  | `/users/me/promote-to-merchant` | JWT    | Request merchant promotion |
+
+### Products — `/products` (Merchant) · `/market` (Public)
+
+| Method | Endpoint                       | Auth     | Description          |
+| ------ | ------------------------------ | -------- | -------------------- |
+| GET    | `/products`                    | Merchant | Own product list     |
+| POST   | `/products`                    | Merchant | Create product       |
+| GET    | `/products/:id`                | Merchant | Product detail       |
+| PATCH  | `/products/:id`                | Merchant | Update product       |
+| DELETE | `/products/:id`                | Merchant | Soft delete          |
+| PATCH  | `/products/:id/relist`         | Merchant | Re-list expired/sold |
+| PATCH  | `/products/:id/media`          | Merchant | Upload media         |
+| DELETE | `/products/:id/media/:mediaId` | Merchant | Remove media item    |
+| GET    | `/market`                      | Public   | Search & browse      |
+| GET    | `/market/:id`                  | Public   | Product detail       |
+
+### Orders — `/orders`
+
+| Method | Endpoint              | Auth     | Description            |
+| ------ | --------------------- | -------- | ---------------------- |
+| POST   | `/orders`             | Buyer    | Place order            |
+| GET    | `/orders/my`          | Buyer    | Own orders             |
+| DELETE | `/orders/:id/cancel`  | Buyer    | Cancel pending order   |
+| PUT    | `/orders/:id/confirm` | Buyer    | Confirm delivery       |
+| GET    | `/orders/incoming`    | Merchant | Incoming orders        |
+| PUT    | `/orders/:id/accept`  | Merchant | Accept order           |
+| PUT    | `/orders/:id/reject`  | Merchant | Reject order           |
+| PUT    | `/orders/:id/status`  | Merchant | Update delivery status |
+| GET    | `/orders/:id`         | Both     | Order detail           |
+
+### Auctions — `/auctions`
+
+| Method | Endpoint                                      | Auth     | Description        |
+| ------ | --------------------------------------------- | -------- | ------------------ |
+| POST   | `/auctions/bids`                              | Buyer    | Place bid          |
+| GET    | `/auctions/bids/mine`                         | Buyer    | My active bids     |
+| DELETE | `/auctions/bids/:bidId`                       | Buyer    | Withdraw bid       |
+| GET    | `/auctions/merchant/products/:productId/bids` | Merchant | Bids on my product |
+| POST   | `/auctions/merchant/bids/:bidId/accept`       | Merchant | Accept bid         |
+
+### Wallet — `/wallet`
+
+| Method | Endpoint               | Auth     | Description         |
+| ------ | ---------------------- | -------- | ------------------- |
+| GET    | `/wallet`              | Merchant | Wallet summary      |
+| GET    | `/wallet/transactions` | Merchant | Transaction history |
+| POST   | `/wallet/withdraw`     | Merchant | Request withdrawal  |
+| GET    | `/wallet/withdrawals`  | Merchant | Withdrawal history  |
+
+### Notifications — `/notifications`
+
+| Method | Endpoint                      | Auth | Description          |
+| ------ | ----------------------------- | ---- | -------------------- |
+| GET    | `/notifications/stream`       | JWT  | SSE stream           |
+| GET    | `/notifications`              | JWT  | Paginated list       |
+| GET    | `/notifications/unread`       | JWT  | Unread list (max 50) |
+| GET    | `/notifications/unread/count` | JWT  | Badge count          |
+| PATCH  | `/notifications/:id/read`     | JWT  | Mark one as read     |
+| PATCH  | `/notifications/read-all`     | JWT  | Mark all as read     |
+
+---
+
+## 8. Data Flow
+
+### Order → Payment → Wallet
+
+```
+Buyer places order (PENDING)
+  └─ Merchant accepts
+       ├─ Order → ACCEPTED
+       ├─ Stripe Checkout session created
+       └─ Payment link sent (email + in-app notification)
+
+Buyer pays (Stripe webhook: checkout.session.completed)
+  └─ Payment → PAID
+       └─ Order stays ACCEPTED (awaiting delivery)
+
+Buyer confirms delivery
+  └─ Order → COMPLETED
+       ├─ Platform fee calculated
+       ├─ Net amount credited to merchant pendingBalance
+       └─ WalletTransaction created (ORDER_EARNING)
+
+Hold period expires (walletHoldDays, default 3)
+  └─ pendingBalance → availableBalance
+       └─ WalletTransaction created (BALANCE_RELEASE)
+
+Merchant requests withdrawal
+  └─ availableBalance decremented (pessimistic lock)
+       └─ WithdrawalRequest created (PENDING)
+            ├─ Admin approves → COMPLETED + bank transfer
+            └─ Admin rejects  → REJECTED + refund to availableBalance
 ```
 
-**Body:**
+### Auction Flow
 
-```typescript
-interface SignUpDto {
-  fullName: string; // User's full name
-  email: string; // Unique email
-  password: string; // Min 6 characters
-  phone: string; // Mobile phone (E.164 format, e.g. +972591234567)
-}
 ```
+Merchant creates product (saleMethod = AUCTION)
+  └─ Product → ACTIVE with auctionEndAt
 
-**Response:** `201 Created`
+Buyer places bid
+  ├─ Validate bid > currentBid (or auctionStartPrice if no bids)
+  ├─ Previous winning bid → isWinning = false
+  ├─ New bid → isWinning = true
+  └─ product.currentBid updated
 
-```json
-{
-  "user": {
-    "id": "uuid",
-    "email": "user@example.com",
-    "fullName": "Ahmed Al-Nabulsi",
-    "phone": "+972591234567",
-    "role": "buyer"
-  },
-  "accessToken": "eyJhbGc...",
-  "refreshToken": "eyJhbGc...",
-  "expiresIn": 3600
-}
+Auction end (scheduled job or merchant accept)
+  └─ Winning bid found
+       └─ Order created automatically
+            └─ Normal order flow continues
 ```
 
 ---
 
-### POST - Sign In
+## 9. Caching Strategy
 
-```http
-POST /auth/signin
-Content-Type: application/json
-```
+All caches use Redis with explicit TTLs and targeted invalidation. No global cache flush is ever used.
 
-**Body:**
+| Cache Key Pattern                                | TTL                 | Bust Trigger                     |
+| ------------------------------------------------ | ------------------- | -------------------------------- |
+| `auth_user:{userId}`                             | 60s                 | logout, logoutAll, role change   |
+| `bl:{jti}`                                       | remaining token TTL | on logout                        |
+| `users:id:{id}`                                  | 15 min              | profile update, avatar change    |
+| `users:public:{id}`                              | 15 min              | profile update                   |
+| `users:stats:{id}`                               | 5 min               | new order, rating change         |
+| `ratings:one:{id}`                               | 10 min              | rating update, flag removal      |
+| `ratings:user:{id}:v{n}:{page}:{limit}`          | 3 min               | version bump on any rating write |
+| `ratings:given:{id}:v{n}:{page}:{limit}`         | 3 min               | version bump on any rating write |
+| `market:{filterHash}`                            | 2 min               | product create/update/delete     |
+| `notifications:count:{userId}`                   | 2 min               | new notification, mark read      |
+| `notifications:unread:{userId}`                  | 2 min               | new notification, mark read      |
+| `notifications:all:{userId}:v{n}:{page}:{limit}` | 1 min               | version bump on any write        |
 
-```typescript
-interface SignInDto {
-  email: string; // User email
-  password: string; // Min 6 characters
-}
-```
-
-**Response:** `200 OK`
-
-```json
-{
-  "user": {
-    /* user object */
-  },
-  "accessToken": "eyJhbGc...",
-  "refreshToken": "eyJhbGc...",
-  "expiresIn": 3600
-}
-```
+**Version-key pattern** is used for all paginated caches. Busting increments a version counter (`ratings:version:user:{id}`) so all page variants are orphaned at once without key scanning. Orphaned keys expire naturally via their TTL.
 
 ---
 
-### POST - Refresh Token
+## 10. Job Queues & Schedulers
 
-```http
-POST /auth/refresh
-Content-Type: application/json
-```
+### Payment Queue (`payment-queue`)
 
-**Body:**
+| Job                      | Schedule     | Action                                                   |
+| ------------------------ | ------------ | -------------------------------------------------------- |
+| `close-expired-payments` | Every 30 min | Cancel orders with unpaid Stripe sessions older than 24h |
 
-```typescript
-interface RefreshTokenDto {
-  refreshToken: string;
-}
-```
+### Notifications Queue (`notifications-queue`)
 
-**Response:** `200 OK`
+| Job                    | Schedule    | Action                                       |
+| ---------------------- | ----------- | -------------------------------------------- |
+| `notification-cleanup` | Sunday 3 AM | Delete read notifications older than 30 days |
 
-```json
-{
-  "accessToken": "eyJhbGc...",
-  "expiresIn": 3600
-}
-```
+### Auctions queue (`auctions-queue`) |runs every 1 minute|
+
+All schedulers use `upsertJobScheduler` on `onModuleInit` — existing schedules are cleared first to prevent duplicates across restarts.
 
 ---
 
-### POST - Logout (Current Device)
+## 11. Notification System
 
-```http
-POST /auth/logout
-Authorization: Bearer {accessToken}
+### Architecture
+
+```
+NotificationsService.notify()
+  └─ EventEmitter2.emitAsync('notification.created')
+       └─ NotificationCreatedListener.handle()
+            ├─ NotificationsDispatcher.dispatch()
+            │    ├─ Persist Notification row (once)
+            │    ├─ IN_APP  → NotificationsGateway.sendNotificationToUser()
+            │    ├─ EMAIL   → MailProvider.send()
+            │    └─ SMS     → (not yet implemented)
+            ├─ bustUnreadForUser() → Redis cache invalidation
+            └─ NotificationsSseService.push() → SSE stream
 ```
 
-**Response:** `200 OK`
+### Channels
 
-```json
-{ "message": "Logged out successfully" }
-```
+| Channel  | Transport                 | Status     |
+| -------- | ------------------------- | ---------- |
+| `IN_APP` | Socket.io WebSocket       | ✅ Active  |
+| `IN_APP` | SSE (browser EventSource) | ✅ Active  |
+| `EMAIL`  | SMTP via Nodemailer       | ✅ Active  |
+| `SMS`    | —                         | 🚧 Planned |
 
----
+### WebSocket Authentication
 
-### POST - Logout All Devices
+Clients connect with `?token=<accessToken>` (or `auth.token`). The gateway verifies the JWT and joins the client to `user:{sub}` room. Unauthenticated connections are immediately disconnected.
 
-```http
-POST /auth/logout-all
-Authorization: Bearer {accessToken}
-```
+### SSE
 
-**Response:** `200 OK`
+Each user has a single `Subject<MessageEvent>` shared across tabs. Reference counting ensures the Subject is completed only when the last tab disconnects.
 
-```json
-{ "message": "All sessions terminated" }
-```
+### Email Templates
 
----
-
-### POST - Send Password Reset Code
-
-```http
-POST /auth/reset/send-code
-Content-Type: application/json
-```
-
-**Body:**
-
-```json
-{ "email": "user@example.com" }
-```
-
-**Response:** `200 OK`
-
-```json
-{ "message": "Reset code sent to email" }
-```
+| Template              | Language | Trigger                    |
+| --------------------- | -------- | -------------------------- |
+| `WELCOME`             | AR       | User registration          |
+| `EMAIL_VERIFICATION`  | AR       | Sign-up OTP                |
+| `PASSWORD_RESET`      | AR       | Reset OTP                  |
+| `ORDER_CONFIRMATION`  | AR       | Order placed               |
+| `PAYMENT_RECEIPT`     | AR       | Payment received           |
+| `PAYMENT_LINK`        | AR       | Order accepted by merchant |
+| `WITHDRAWAL_APPROVED` | AR       | Withdrawal completed       |
 
 ---
 
-### POST - Verify Reset Code
+## 12. File Uploads & Media
 
-```http
-POST /auth/reset/verify
-Content-Type: application/json
-```
+All uploads go through Cloudinary. The `UploadService` handles single and multi-file uploads, replacement (delete old + upload new), and deletion.
 
-**Body:**
+| Entity        | Max Files | Field                                      |
+| ------------- | --------- | ------------------------------------------ |
+| User avatar   | 1         | `profileImage` + `avatarPublicId`          |
+| Farm media    | 10        | `FarmMedia[]`                              |
+| Product media | 10        | `ProductMedia[]`                           |
+| Auction cover | 1         | `auctionImageUrl` + `auctionImagePublicId` |
+| Category icon | 1         | `iconUrl` + `iconPublicId`                 |
 
-```json
-{
-  "email": "user@example.com",
-  "code": "123456"
-}
-```
-
-**Response:** `200 OK`
-
-```json
-{ "verificationToken": "temp-token-for-password-change" }
-```
+Files are streamed through memory (never written to disk) using Fastify's multipart parser. The `FileValidationPipe` and `FilesValidationPipe` enforce MIME type and size before Cloudinary upload.
 
 ---
 
-### POST - Change Password
+## 13. Payment Flow
 
-```http
-POST /auth/reset/change-password
-Content-Type: application/json
+### Stripe Integration
+
+```
+1. Order accepted by merchant
+2. PaymentsService.initiatePayment(orderId, buyerId)
+   └─ Creates Stripe Checkout Session
+        success_url: {FRONTEND_URL}/payment/success?orderId=...
+        cancel_url:  {FRONTEND_URL}/payment/cancel?orderId=...
+3. Checkout URL sent to buyer via:
+   ├─ Email (PAYMENT_LINK template) — best-effort
+   └─ In-app notification (primary channel)
+4. Buyer completes payment on Stripe-hosted page
+5. Stripe fires webhook → POST /payments/webhook
+6. PaymentsService.handleWebhook()
+   └─ Verifies Stripe signature (raw body — never re-serialized)
+        └─ checkout.session.completed
+             ├─ Payment → PAID
+             └─ Order flow continues
 ```
 
-**Body:**
+### Unpaid Order Cleanup
 
-```json
-{
-  "email": "user@example.com",
-  "newPassword": "newPassword123"
-}
-```
-
-**Response:** `200 OK`
-
-```json
-{ "message": "Password updated successfully" }
-```
-
----
-
-## 👤 Users Endpoints
-
-### GET - Get Current User Profile
-
-```http
-GET /users/me
-Authorization: Bearer {accessToken}
-```
-
-**Response:** `200 OK`
-
-```json
-{
-  "id": "uuid",
-  "email": "user@example.com",
-  "fullName": "Ahmed Al-Nabulsi",
-  "phone": "+972591234567",
-  "role": "buyer",
-  "avatar": "https://...",
-  "createdAt": "2024-01-15T10:30:00Z"
-}
-```
+A BullMQ job runs every 30 minutes. Orders with a `PENDING` payment older than 24 hours are cancelled and the Stripe session is expired.
 
 ---
 
-### PUT - Update Profile
-
-```http
-PUT /users/me
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Body:**
-
-```typescript
-interface UpdateProfileDto {
-  fullName?: string;
-  phone?: string;
-  address?: string;
-  // ... other optional fields
-}
-```
-
-**Response:** `200 OK` - Updated user object
-
----
-
-### POST - Upload Avatar
-
-```http
-POST /users/me/avatar
-Authorization: Bearer {accessToken}
-Content-Type: multipart/form-data
-```
-
-**Body:**
-
-- `file`: Image file (JPEG, PNG, WebP)
-
-**Response:** `200 OK`
-
-```json
-{
-  "avatarUrl": "https://cdn.example.com/avatars/user-123.jpg"
-}
-```
-
----
-
-### GET - Get Public User Profile
-
-```http
-GET /users/:userId/profile
-```
-
-**Response:** `200 OK`
-
-```json
-{
-  "id": "uuid",
-  "fullName": "Ahmed Al-Nabulsi",
-  "avatar": "https://...",
-  "role": "merchant",
-  "averageRating": 4.8,
-  "totalRatings": 156
-}
-```
-
----
-
-## 🏪 Categories Endpoints
-
-### GET - List All Categories
-
-```http
-GET /categories
-```
-
-**Response:** `200 OK`
-
-```json
-[
-  {
-    "id": "uuid",
-    "name": "Vegetables",
-    "description": "Fresh vegetables and greens",
-    "icon": "https://...",
-    "subCategories": [
-      { "id": "uuid", "name": "Leafy Greens" },
-      { "id": "uuid", "name": "Root Vegetables" }
-    ]
-  }
-]
-```
-
----
-
-### GET - Get Category Detail
-
-```http
-GET /categories/:categoryId
-```
-
-**Response:** `200 OK` - Category object with subcategories
-
----
-
-### POST - Create Category (Admin Only)
-
-```http
-POST /categories
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required Role:** `ADMIN`
-
-**Body:**
-
-```typescript
-interface CreateCategoryDto {
-  name: string;
-  description?: string;
-  parentCategoryId?: string; // For subcategories
-}
-```
-
-**Response:** `201 Created` - Created category object
-
----
-
-### PUT - Update Category (Admin Only)
-
-```http
-PUT /categories/:categoryId
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required Role:** `ADMIN`
-
-**Body:** Partial CreateCategoryDto
-
-**Response:** `200 OK` - Updated category object
-
----
-
-### DELETE - Delete Category (Admin Only)
-
-```http
-DELETE /categories/:categoryId
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `ADMIN`
-
-**Response:** `204 No Content`
-
----
-
-## 🛍️ Products Endpoints
-
-### GET - List My Products (Merchant Only)
-
-```http
-GET /products?status=ACTIVE
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Query Parameters:**
-
-- `status` (optional) - Filter: `ACTIVE`, `SOLD`, `EXPIRED`, `DRAFT`
-
-**Response:** `200 OK`
-
-```json
-[
-  {
-    "id": "uuid",
-    "name": "Organic Tomatoes",
-    "description": "Fresh organic tomatoes",
-    "quantity": 100,
-    "unit": "kg",
-    "saleMethod": "fixed",
-    "fixedPrice": 50,
-    "categoryId": "uuid",
-    "farmId": "uuid",
-    "status": "active",
-    "images": ["https://..."],
-    "createdAt": "2024-01-15T10:30:00Z"
-  }
-]
-```
-
----
-
-### POST - Create Product (Merchant Only)
-
-```http
-POST /products
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required Role:** `MERCHANT`
-
-**Body:**
-
-```typescript
-interface CreateProductDto {
-  farmId: string; // Farm UUID
-  categoryId?: string; // Category UUID
-  name: string; // Product name
-  description?: string;
-  quantity: number; // Available quantity
-  unit: Unit; // kg, ton, head, box, piece
-  saleMethod: SaleMethod; // "fixed" | "auction"
-
-  // For fixed price sales
-  fixedPrice?: number; // Only if saleMethod === "fixed"
-
-  // For auction sales
-  auctionStartPrice?: number; // Only if saleMethod === "auction"
-  auctionEndAt?: string; // ISO 8601 date
-  auctionDurationHours?: number; // 1-720 hours
-
-  deliveryMethod: DeliveryMethod; // "from_farm" | "driver"
-  driverName?: string; // If deliveryMethod === "driver"
-  driverPhone?: string; // If deliveryMethod === "driver"
-}
-```
-
-**Response:** `201 Created` - Created product object
-
----
-
-### GET - Get Product Detail (Merchant View)
-
-```http
-GET /products/:productId
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Response:** `200 OK` - Product with full details and analytics
-
----
-
-### PATCH - Update Product (Merchant Only)
-
-```http
-PATCH /products/:productId
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required Role:** `MERCHANT`
-
-**Body:** Partial CreateProductDto
-
-**Response:** `200 OK` - Updated product object
-
----
-
-### DELETE - Soft Delete Product (Merchant Only)
-
-```http
-DELETE /products/:productId
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Response:** `204 No Content`
-
----
-
-### PATCH - Re-list Product (Merchant Only)
-
-```http
-PATCH /products/:productId/relist
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Description:** Re-list a sold or expired product with the same details
-
-**Response:** `200 OK` - Re-listed product object
-
----
-
-### POST - Upload Product Media (Merchant Only)
-
-```http
-POST /products/:productId/media
-Authorization: Bearer {accessToken}
-Content-Type: multipart/form-data
-```
-
-**Required Role:** `MERCHANT`
-
-**Body:**
-
-- `files`: Up to 10 image/video files (JPEG, PNG, MP4, WebM)
-
-**Response:** `200 OK`
-
-```json
-[
-  {
-    "id": "uuid",
-    "type": "image",
-    "url": "https://cdn.example.com/products/...",
-    "uploadedAt": "2024-01-15T10:30:00Z"
-  }
-]
-```
-
----
-
-### DELETE - Delete Product Media (Merchant Only)
-
-```http
-DELETE /products/:productId/media/:mediaId
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Response:** `204 No Content`
-
----
-
-## 🌾 Farms Endpoints
-
-### GET - List My Farms (Merchant Only)
-
-```http
-GET /farms
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Response:** `200 OK`
-
-```json
-[
-  {
-    "id": "uuid",
-    "name": "Green Valley Farm",
-    "displayName": "Green Valley",
-    "managerName": "Ahmed Al-Nabulsi",
-    "contactPhone": "+972591234567",
-    "latitude": 32.211,
-    "longitude": 35.2007,
-    "locationText": "Nablus, Palestine",
-    "agRegistryNo": "REG-12345",
-    "status": "approved",
-    "createdAt": "2024-01-01T00:00:00Z"
-  }
-]
-```
-
----
-
-### POST - Create Farm (Merchant Only)
-
-```http
-POST /farms
-Authorization: Bearer {accessToken}
-Content-Type: multipart/form-data
-```
-
-**Required Role:** `MERCHANT`
-
-**Body:**
-
-```typescript
-interface CreateFarmDto {
-  name: string; // 2-150 chars
-  displayName: string; // 2-150 chars
-  managerName: string; // 2-100 chars
-  contactPhone: string; // Mobile phone
-  latitude?: number;
-  longitude?: number;
-  locationText?: string;
-  agRegistryNo?: string; // Agricultural registry number
-}
-```
-
-**Files:**
-
-- `registryFile` (optional) - PDF/image of farm registration
-
-**Response:** `201 Created` - Created farm object
-
----
-
-### GET - Get Farm Detail (Merchant Only)
-
-```http
-GET /farms/:farmId
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Response:** `200 OK` - Farm object with full details
-
----
-
-### PUT - Update Farm (Merchant Only)
-
-```http
-PUT /farms/:farmId
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required Role:** `MERCHANT`
-
-**Body:** Partial CreateFarmDto
-
-**Response:** `200 OK` - Updated farm object
-
----
-
-### DELETE - Delete Farm (Merchant Only)
-
-```http
-DELETE /farms/:farmId
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Response:** `204 No Content`
-
----
-
-### POST - Approve Farm (Admin Only)
-
-```http
-POST /farms/:farmId/approve
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `ADMIN`
-
-**Response:** `200 OK` - Approved farm object with status = "approved"
-
----
-
-## 📦 Orders Endpoints
-
-### POST - Place Order (Buyer Only)
-
-```http
-POST /orders
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required Role:** `BUYER`
-
-**Body:**
-
-```typescript
-interface CreateOrderDto {
-  productId: string; // Product UUID
-  offeredPrice: number; // Buyer's offered price (min 0)
-  quantity: number; // Min 0.001
-  notes?: string; // Optional delivery notes
-}
-```
-
-**Response:** `201 Created`
-
-```json
-{
-  "id": "uuid",
-  "buyerId": "uuid",
-  "productId": "uuid",
-  "merchantId": "uuid",
-  "quantity": 5,
-  "offeredPrice": 250,
-  "status": "PENDING",
-  "deliveryStatus": "PREPARING",
-  "notes": "Please deliver in the morning",
-  "createdAt": "2024-01-15T10:30:00Z"
-}
-```
-
----
-
-### GET - List My Orders (Buyer Only)
-
-```http
-GET /orders/my?page=1&limit=20
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `BUYER`
-
-**Query Parameters:**
-
-- `page` - Page number (default: 1)
-- `limit` - Items per page (default: 20)
-
-**Response:** `200 OK` - Paginated orders array
-
----
-
-### DELETE - Cancel Order (Buyer Only)
-
-```http
-DELETE /orders/:orderId/cancel
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `BUYER`
-
-**Response:** `200 OK` - Cancelled order object
-
----
-
-### GET - List Incoming Orders (Merchant Only)
-
-```http
-GET /orders/incoming?page=1&limit=20
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Query Parameters:**
-
-- `page` - Page number (default: 1)
-- `limit` - Items per page (default: 20)
-
-**Response:** `200 OK` - Paginated orders array
-
----
-
-### PUT - Accept Order (Merchant Only)
-
-```http
-PUT /orders/:orderId/accept
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Response:** `200 OK`
-
-```json
-{
-  "id": "uuid",
-  "status": "ACCEPTED",
-  "buyerPhone": "+972591234567", // Revealed on acceptance
-  "acceptedAt": "2024-01-15T10:35:00Z"
-}
-```
-
----
-
-### PUT - Reject Order (Merchant Only)
-
-```http
-PUT /orders/:orderId/reject
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required Role:** `MERCHANT`
-
-**Body:**
-
-```json
-{
-  "reason": "Out of stock due to unexpected demand"
-}
-```
-
-**Response:** `200 OK` - Rejected order with reason
-
----
-
-### PUT - Confirm Delivery (Buyer Only)
-
-```http
-PUT /orders/:orderId/confirm
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `BUYER`
-
-**Response:** `200 OK`
-
-```json
-{
-  "id": "uuid",
-  "status": "COMPLETED",
-  "deliveryStatus": "DELIVERED",
-  "confirmedAt": "2024-01-15T14:00:00Z"
-}
-```
-
----
-
-### PUT - Update Delivery Status (Merchant Only)
-
-```http
-PUT /orders/:orderId/status
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required Role:** `MERCHANT`
-
-**Body:**
-
-```typescript
-interface UpdateOrderStatusDto {
-  status: DeliveryStatus; // PREPARING, READY_PICKUP, IN_DELIVERY, DELIVERED
-  reason?: string;
-}
-```
-
-**Response:** `200 OK` - Updated order object
-
----
-
-### GET - Get Order Detail
-
-```http
-GET /orders/:orderId
-Authorization: Bearer {accessToken}
-```
-
-**Response:** `200 OK` - Order object (buyer sees their orders, merchant sees incoming orders)
-
----
-
-## 💰 Wallet Endpoints
-
-### GET - Get Wallet Summary (Merchant Only)
-
-```http
-GET /wallet
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Response:** `200 OK`
-
-```json
-{
-  "balance": 1500.5,
-  "available": 1200.0,
-  "onHold": 300.5,
-  "totalEarnings": 5000.0,
-  "totalWithdrawn": 3500.0,
-  "currency": "ILS"
-}
-```
-
----
-
-### GET - List Transactions (Merchant Only)
-
-```http
-GET /wallet/transactions?page=1&limit=20
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Query Parameters:**
-
-- `page` - Page number (default: 1)
-- `limit` - Items per page (default: 20)
-
-**Response:** `200 OK`
-
-```json
-[
-  {
-    "id": "uuid",
-    "type": "credit",
-    "amount": 250.0,
-    "reason": "order_earning",
-    "orderId": "uuid",
-    "status": "completed",
-    "timestamp": "2024-01-15T14:00:00Z"
-  }
-]
-```
-
----
-
-### POST - Request Withdrawal (Merchant Only)
-
-```http
-POST /wallet/withdraw
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required Role:** `MERCHANT`
-
-**Body:**
-
-```typescript
-interface WithdrawDto {
-  amount: number; // Min: 1
-  bankAccountId?: string; // UUID of saved bank account
-  notes?: string;
-}
-```
-
-**Response:** `201 Created`
-
-```json
-{
-  "id": "uuid",
-  "amount": 500.0,
-  "status": "pending",
-  "bankAccount": {
-    /* account details */
-  },
-  "requestedAt": "2024-01-15T10:30:00Z"
-}
-```
-
----
-
-### GET - List Withdrawals (Merchant Only)
-
-```http
-GET /wallet/withdrawals
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Response:** `200 OK`
-
-```json
-[
-  {
-    "id": "uuid",
-    "amount": 500.0,
-    "status": "completed",
-    "bankAccount": {
-      /* account details */
-    },
-    "requestedAt": "2024-01-15T10:30:00Z",
-    "completedAt": "2024-01-16T09:00:00Z"
-  }
-]
-```
-
----
-
-## 🏷️ Auctions Endpoints
-
-### POST - Place Bid (Buyer Only)
-
-```http
-POST /auctions/bids
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required Role:** `BUYER`
-
-**Body:**
-
-```typescript
-interface PlaceBidDto {
-  productId: string; // Auction product UUID
-  amount: number; // Must exceed current highest bid
-}
-```
-
-**Response:** `201 Created`
-
-```json
-{
-  "id": "uuid",
-  "productId": "uuid",
-  "buyerId": "uuid",
-  "amount": 150.0,
-  "status": "active",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
----
-
-### GET - List My Active Bids (Buyer Only)
-
-```http
-GET /auctions/bids/mine
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `BUYER`
-
-**Response:** `200 OK`
-
-```json
-[
-  {
-    "id": "uuid",
-    "productId": "uuid",
-    "productName": "Organic Tomatoes",
-    "amount": 150.0,
-    "status": "active",
-    "isHighestBid": true,
-    "auctionEndsAt": "2024-01-20T18:00:00Z"
-  }
-]
-```
-
----
-
-### DELETE - Withdraw Bid (Buyer Only)
-
-```http
-DELETE /auctions/bids/:bidId
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `BUYER`
-
-**Response:** `204 No Content`
-
----
-
-### GET - Get All Bids on Product (Merchant Only)
-
-```http
-GET /auctions/merchant/products/:productId/bids
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Response:** `200 OK` - Array of bids sorted by amount (highest first)
-
-```json
-[
-  {
-    "id": "uuid",
-    "buyerId": "uuid",
-    "buyerName": "Ahmed",
-    "amount": 150.0,
-    "status": "active",
-    "timestamp": "2024-01-15T10:30:00Z"
-  }
-]
-```
-
----
-
-### POST - Accept Bid (Merchant Only)
-
-```http
-POST /auctions/merchant/bids/:bidId/accept
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `MERCHANT`
-
-**Response:** `200 OK`
-
-```json
-{
-  "id": "uuid",
-  "productId": "uuid",
-  "buyerId": "uuid",
-  "amount": 150.0,
-  "status": "won",
-  "acceptedAt": "2024-01-15T11:00:00Z"
-}
-```
-
----
-
-## ⭐ Ratings Endpoints
-
-### POST - Submit Rating
-
-```http
-POST /ratings
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required:** ✅ Authenticated
-
-**Body:**
-
-```typescript
-interface CreateRatingDto {
-  orderId: string; // Completed order UUID
-  score: number; // 1-5
-  comment?: string; // Max 500 chars
-}
-```
-
-**Response:** `201 Created`
-
-```json
-{
-  "id": "uuid",
-  "orderId": "uuid",
-  "reviewerId": "uuid",
-  "recipientId": "uuid",
-  "score": 5,
-  "comment": "Excellent quality and fast delivery!",
-  "createdAt": "2024-01-15T14:00:00Z"
-}
-```
-
----
-
-### GET - List My Given Ratings
-
-```http
-GET /ratings/given?page=1&limit=20
-Authorization: Bearer {accessToken}
-```
-
-**Required:** ✅ Authenticated
-
-**Query Parameters:**
-
-- `page` - Page number (default: 1)
-- `limit` - Items per page (default: 20)
-
-**Response:** `200 OK` - Paginated ratings array
-
----
-
-### GET - Get User's Received Ratings (Public)
-
-```http
-GET /ratings/user/:userId?page=1&limit=20
-```
-
-**Response:** `200 OK` - Paginated ratings array
-
----
-
-### POST - Flag Rating
-
-```http
-POST /ratings/:ratingId/flag
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required:** ✅ Authenticated
-
-**Body:**
-
-```typescript
-interface FlagRatingDto {
-  reason: FlagReason; // See enum below
-  notes?: string; // Max 300 chars
-}
-
-enum FlagReason {
-  ABUSIVE_CONTENT = 'abusive_content',
-  FALSE_INFORMATION = 'false_information',
-  SPAM = 'spam',
-  INAPPROPRIATE = 'inappropriate',
-  OTHER = 'other',
-}
-```
-
-**Response:** `201 Created` - Flag object
-
----
-
-### GET - List Pending Flags (Admin Only)
-
-```http
-GET /ratings/admin/flags?page=1&limit=20
-Authorization: Bearer {accessToken}
-```
-
-**Required Role:** `ADMIN`
-
-**Query Parameters:**
-
-- `page` - Page number (default: 1)
-- `limit` - Items per page (default: 20)
-
-**Response:** `200 OK` - Paginated pending flags
-
----
-
-### PATCH - Resolve Flag (Admin Only)
-
-```http
-PATCH /ratings/admin/flags/:flagId
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required Role:** `ADMIN`
-
-**Body:**
-
-```typescript
-interface ReviewFlagDto {
-  status: 'REVIEWED' | 'DISMISSED' | 'REMOVED';
-  adminNotes?: string; // Max 500 chars
-}
-```
-
-**Response:** `200 OK` - Resolved flag object
-
----
-
-## 🔔 Notifications Endpoints
-
-### GET - List All Notifications
-
-```http
-GET /notifications?page=1&limit=20
-Authorization: Bearer {accessToken}
-```
-
-**Required:** ✅ Authenticated
-
-**Query Parameters:**
-
-- `page` - Page number (default: 1)
-- `limit` - Items per page (default: 20)
-
-**Response:** `200 OK`
-
-```json
-[
-  {
-    "id": "uuid",
-    "userId": "uuid",
-    "type": "order_placed",
-    "title": "New Order Received",
-    "message": "Ahmed ordered 5 kg of tomatoes",
-    "orderId": "uuid",
-    "isRead": false,
-    "createdAt": "2024-01-15T10:30:00Z"
-  }
-]
-```
-
----
-
-### GET - List Unread Notifications
-
-```http
-GET /notifications/unread
-Authorization: Bearer {accessToken}
-```
-
-**Required:** ✅ Authenticated
-
-**Response:** `200 OK` - Array of unread notifications
-
----
-
-### GET - Count Unread
-
-```http
-GET /notifications/unread/count
-Authorization: Bearer {accessToken}
-```
-
-**Required:** ✅ Authenticated
-
-**Response:** `200 OK`
-
-```json
-{
-  "unreadCount": 5
-}
-```
-
----
-
-### PATCH - Mark as Read
-
-```http
-PATCH /notifications/:notificationId/read
-Authorization: Bearer {accessToken}
-```
-
-**Required:** ✅ Authenticated
-
-**Response:** `200 OK` - Updated notification object
-
----
-
-### PATCH - Mark All as Read
-
-```http
-PATCH /notifications/read-all
-Authorization: Bearer {accessToken}
-```
-
-**Required:** ✅ Authenticated
-
-**Response:** `200 OK`
-
-```json
-{ "message": "All notifications marked as read" }
-```
-
----
-
-### POST - Register FCM Token (Push Notifications)
-
-```http
-POST /notifications/fcm-token
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required:** ✅ Authenticated
-
-**Body:**
-
-```typescript
-interface RegisterFcmDto {
-  token: string; // FCM device token
-  platform: Platform; // "ios" | "android" | "web"
-}
-```
-
-**Response:** `200 OK`
-
-```json
-{
-  "registered": true,
-  "platform": "android"
-}
-```
-
----
-
-### DELETE - Remove FCM Token
-
-```http
-DELETE /notifications/fcm-token
-Authorization: Bearer {accessToken}
-Content-Type: application/json
-```
-
-**Required:** ✅ Authenticated
-
-**Body:**
-
-```json
-{
-  "token": "fcm_device_token"
-}
-```
-
-**Response:** `204 No Content`
-
----
-
-## 🌐 Common Patterns
-
-### Pagination
-
-All list endpoints support pagination with these query parameters:
-
-```
-?page=1&limit=20
-```
-
-**Response Format:**
-
-```json
-{
-  "data": [
-    /* array of items */
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 150,
-    "pages": 8
-  }
-}
-```
-
-### Error Responses
-
-All error responses follow this format:
-
-```json
-{
-  "statusCode": 400,
-  "message": "Validation failed",
-  "error": "Bad Request",
-  "details": [
-    {
-      "field": "email",
-      "message": "Invalid email format"
-    }
-  ]
-}
-```
+## 14. Security
 
 ### Authentication
 
-All protected endpoints require:
+- Access tokens blacklisted in Redis on logout (`bl:{jti}`)
+- `tokenVersion` on User entity invalidates all existing tokens on `logoutAll`
+- Refresh tokens stored as SHA-256 hash — plain token never persisted
+- JWT type claim (`access` / `refresh`) prevents token type confusion attacks
 
+### Rate Limiting
+
+All auth endpoints are throttled via `@Throttle`:
+
+- Signup, signin, verify-email, refresh, reset: **3 requests / 3 minutes**
+- Google OAuth: **5 requests / 3 minutes**
+
+### Guards & Role Enforcement
+
+- `@Public()` decorator explicitly opts out of `JwtAuthGuard`
+- `RolesGuard` reads from `@Roles()` metadata — defaults to deny if no role set
+- `AdminGuard` requires both `role = ADMIN` and valid `x-admin-secret` header
+
+### Input Validation
+
+- All DTOs use `class-validator` with explicit type transforms
+- `ParseUUIDPipe` on all `:id` route parameters
+- Paginated endpoints enforce `@Max(100)` on `limit`
+- Price fields use `@Min(0.01)` — zero-price orders/bids rejected at DTO level
+
+### Data Privacy
+
+- `ipAddress` on `AuctionBid` — `select: false`, never returned to client
+- `buyerPhoneRevealed` on `Order` — `select: false`
+- Sensitive User fields (`password`, `refreshTokenHash`, reset fields) — `select: false` + `@Exclude()`
+- Stripe webhook raw body verified before processing — `JSON.stringify` fallback removed
+
+### Concurrency
+
+- All wallet mutations use `pessimistic_write` row locks
+- `setDefault` on BankAccount uses a transaction to atomically swap the flag
+- `rejectWithdrawal` locks the `WithdrawalRequest` row to prevent double-refund
+
+---
+
+## 15. Environment Variables
+
+```env
+# App
+NODE_ENV=production
+PORT=3000
+API_PREFIX=api/v1
+FRONTEND_URL=https://your-frontend.com
+ADMIN_SECRET=your-admin-secret
+
+# Database
+DB_HOST=
+DB_PORT=5432
+DB_USERNAME=
+DB_PASSWORD=
+DB_NAME=mahaseel
+
+# Redis
+REDIS_HOST=
+REDIS_PORT=6379
+REDIS_PASSWORD=
+
+# JWT
+JWT_ACCESS_SECRET=
+JWT_ACCESS_EXPIRES=1d
+JWT_REFRESH_SECRET=
+JWT_REFRESH_EXPIRES=30d
+
+# Google OAuth
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_CALLBACK_URL=https://your-api.com/api/v1/auth/google/callback
+
+# Stripe
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+
+# Cloudinary
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+
+# Mail (SMTP)
+MAIL_HOST=
+MAIL_PORT=587
+MAIL_SECURE=false
+MAIL_USER=
+MAIL_PASS=
+MAIL_FROM_NAME=محصول
+MAIL_FROM_ADDRESS=no-reply@mahaseel.com
+MAIL_SUPPORT_ADDRESS=support@mahaseel.com
+
+# Business Config
+PLATFORM_FEE_PERCENT=5
+WALLET_HOLD_DAYS=3
+THROTTLE_TTL=60
+THROTTLE_LIMIT=100
+OTP_EXPIRY_SECONDS=600
+OTP_LENGTH=6
+OTP_MOCK=false
 ```
-Authorization: Bearer {accessToken}
-```
-
----
-
-## 🔑 Legend
-
-| Symbol               | Meaning                             |
-| -------------------- | ----------------------------------- |
-| **✅ Authenticated** | Requires valid JWT token            |
-| **🔑 Role: X**       | Requires specific user role         |
-| **Public**           | No authentication required          |
-| `201 Created`        | Successful resource creation        |
-| `200 OK`             | Successful request                  |
-| `204 No Content`     | Successful deletion with no body    |
-| `400 Bad Request`    | Validation error                    |
-| `401 Unauthorized`   | Invalid/missing token               |
-| `403 Forbidden`      | Insufficient permissions            |
-| `404 Not Found`      | Resource not found                  |
-| `409 Conflict`       | Resource conflict (e.g., duplicate) |
-| `500 Server Error`   | Server-side error                   |
-
----
-
-## 📝 Important Notes
-
-1. **Timestamps** - All timestamps are in ISO 8601 format (UTC)
-2. **Currencies** - Prices are in the base currency (ILS by default)
-3. **Rate Limiting** - Endpoints are rate-limited to prevent abuse
-4. **CORS** - Cross-origin requests are allowed from registered origins
-5. **File Uploads** - Max file size is 50MB per file
-6. **Phone Numbers** - Must be in E.164 format (e.g., +972591234567)
-7. **UUIDs** - All IDs are UUID v4 format
-8. **Soft Deletes** - Deleted records remain in the database but are marked as deleted
-
----
-
-## 🚀 Getting Started
-
-1. **Register** - Call `POST /auth/signup` with your details
-2. **Login** - Call `POST /auth/signin` to get tokens
-3. **Set Up Farm** - Merchants create farm(s) via `POST /farms`
-4. **List Products** - Merchants list products via `POST /products`
-5. **Browse & Order** - Buyers browse and place orders
-6. **Manage Orders** - Both parties manage order lifecycle
-7. **Rate & Review** - Buyers rate completed orders
-
----

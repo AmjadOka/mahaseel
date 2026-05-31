@@ -294,22 +294,10 @@ export class InitialSchema1700000000000 implements MigrationInterface {
     await queryRunner.query(
       `CREATE INDEX "IDX_notifications_user_unread" ON "notifications" ("user_id", "is_read")`,
     );
-
-    // FCM TOKENS
-    await queryRunner.query(`
-      CREATE TABLE "fcm_tokens" (
-        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        "user_id" UUID NOT NULL REFERENCES "users"("id"),
-        "token" VARCHAR UNIQUE NOT NULL,
-        "platform" "platform_enum" NOT NULL,
-        "updated_at" TIMESTAMP DEFAULT now()
-      )
-    `);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     const tables = [
-      'fcm_tokens',
       'notifications',
       'ratings',
       'withdrawal_requests',
