@@ -417,11 +417,11 @@ export class MailProvider implements OnModuleInit {
     this.transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
       port: 587,
-      secure: true,
+      secure: false,
 
       auth: {
-        user: this.config.getOrThrow('MAIL_USER'),
-        pass: this.config.getOrThrow('MAIL_PASS'),
+        user: this.config.getOrThrow('MAIL_USER')?.trim(),
+        pass: this.config.getOrThrow('MAIL_PASS')?.replace(/\s/g, ''),
       },
       logger: true,
       debug: true,
