@@ -1,7 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
-import SMTPTransport from 'nodemailer/lib/smtp-transport';
 import { EmailTemplate } from 'src/common/enums/email.enum';
 
 export interface MailPayload {
@@ -410,7 +409,7 @@ const TEMPLATE_BUILDERS: Record<
 ===================================================== */
 
 @Injectable()
-export class MailProvider {
+export class MailProvider implements OnModuleInit {
   private readonly logger = new Logger(MailProvider.name);
   private readonly transporter: nodemailer.Transporter;
 
@@ -423,6 +422,8 @@ export class MailProvider {
         user: this.config.getOrThrow('MAIL_USER'),
         pass: this.config.getOrThrow('MAIL_PASS'),
       },
+      logger: true,
+      debug: true,
     });
   }
 
@@ -449,6 +450,17 @@ export class MailProvider {
         err instanceof Error ? err.stack : String(err),
       );
       throw err;
+    }
+  }
+  async onModuleInit() {
+    try {
+      await this.transporter.verify();
+      this.logger.log('SMTP connection verified');
+    } catch (err) {
+      this.logger.error(
+        'SMTP verification failed',
+        err instanceof Error ? err.stack : String(err),
+      );
     }
   }
 }
