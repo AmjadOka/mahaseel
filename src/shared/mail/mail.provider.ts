@@ -416,15 +416,17 @@ export class MailProvider implements OnModuleInit {
   constructor(private readonly config: ConfigService) {
     this.transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
-      port: 465,
+      port: 587,
       secure: true,
+
       auth: {
         user: this.config.getOrThrow('MAIL_USER'),
         pass: this.config.getOrThrow('MAIL_PASS'),
       },
       logger: true,
       debug: true,
-    });
+      family: 4, // IPv4 only to avoid potential IPv6 issues
+    } as any);
   }
 
   async send(payload: MailPayload): Promise<void> {
