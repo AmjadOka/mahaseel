@@ -119,10 +119,6 @@ export class UsersController {
     return this.usersService.removeAvatar(id);
   }
 
-  /**
-   * POST /users/me/promote-to-merchant
-   */
-
   @Patch('me/promote-to-merchant')
   promoteToMerchant(@CurrentUser('id') id: string) {
     return this.usersService.requestPromoteToMerchant(id);

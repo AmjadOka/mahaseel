@@ -409,7 +409,7 @@ const TEMPLATE_BUILDERS: Record<
 ===================================================== */
 
 @Injectable()
-export class MailProvider implements OnModuleInit {
+export class MailProvider {
   private readonly logger = new Logger(MailProvider.name);
   private readonly transporter: nodemailer.Transporter;
 
@@ -425,13 +425,22 @@ export class MailProvider implements OnModuleInit {
       },
       logger: true,
       debug: true,
-      family: 4, // IPv4 only to avoid potential IPv6 issues
+      family: 4,
     } as any);
   }
 
   async send(payload: MailPayload): Promise<void> {
     const builder = TEMPLATE_BUILDERS[payload.template];
     const html = builder(payload.context);
+    const from = `"${this.config.get('MAIL_FROM_NAME', 'Mahaseel')}" <${this.config.getOrThrow('MAIL_FROM_ADDRESS')}>`;
+
+    this.logger.log(
+      `Email sent [${payload.template}] → ${payload.to} | ${payload.subject}`,
+    );
+
+    /**
+     
+
 
     const from = `"${this.config.get('MAIL_FROM_NAME', 'Mahaseel')}" <${this.config.getOrThrow('MAIL_FROM_ADDRESS')}>`;
 
@@ -464,5 +473,8 @@ export class MailProvider implements OnModuleInit {
         err instanceof Error ? err.stack : String(err),
       );
     }
+  }
+
+     */
   }
 }

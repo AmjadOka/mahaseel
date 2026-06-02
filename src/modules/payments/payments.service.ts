@@ -693,7 +693,8 @@ export class PaymentsService {
         title: 'Complete your payment',
         body: `Your order for "${opts.productName}" was accepted. Pay now to confirm.`,
         titleAr: 'يرجى إتمام الدفع',
-        bodyAr: `تم قبول طلبك على "${opts.productName}". أكمل الدفع الآن لتأكيد طلبك.`,
+        bodyAr: `تم قبول طلبك على "${opts.productName}". أكمل الدفع الآن لتأكيد طلبك.
+        ${opts.paymentUrl}`,
         referenceType: 'order',
         referenceId: opts.orderId,
       }),
