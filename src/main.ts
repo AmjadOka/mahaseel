@@ -135,8 +135,8 @@ async function bootstrap() {
 
   await app.listen(port, '0.0.0.0');
 
-  //const dataSource = app.get(DataSource);
-  //await seedCategories(dataSource);
+  const dataSource = app.get(DataSource);
+  await seedCategories(dataSource);
 
   console.log(`🌾 API running on http://localhost:${port}`);
 }

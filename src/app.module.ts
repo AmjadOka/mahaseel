@@ -23,7 +23,6 @@ import { WalletModule } from './modules/wallet/wallet.module';
 import { RatingsModule } from './modules/ratings/ratings.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { AdminModule } from './modules/admin/admin.module';
-import { JwtModule } from '@nestjs/jwt';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { UploadModule } from './modules/upload/upload.module';
 import { BankAccountModule } from './modules/bank-account/bank-account.module';
@@ -65,15 +64,6 @@ import { BankAccountModule } from './modules/bank-account/bank-account.module';
       }),
     }),
 
-    JwtModule.registerAsync({
-      global: true,
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '1d' },
-      }),
-    }),
     EventEmitterModule.forRoot(),
     // StorageModule,
 

@@ -28,6 +28,7 @@ import type { StringValue } from 'ms';
         signOptions: {
           expiresIn: config.getOrThrow<StringValue>('jwt.accessExpires'),
         },
+        global: true,
       }),
     }),
     PassportModule.register({ defaultStrategy: 'jwt' }),
