@@ -83,7 +83,7 @@ export class BankAccountController {
 
   /* ── Admin routes ─────────────────────────────────── */
 
-  @Get('admin/user/:userId')
+  @Get('admin/bank/user/:userId')
   @Roles(Role.ADMIN)
   @ApiOperation({ summary: '[Admin] Get bank accounts for a merchant' })
   getAccountsForUser(@Param('userId', ParseUUIDPipe) userId: string) {

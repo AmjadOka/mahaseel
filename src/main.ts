@@ -121,6 +121,11 @@ async function bootstrap() {
       .addTag('orders')
       .addTag('wallet')
       .addTag('notifications')
+      .addTag('payments')
+      .addTag('auctions')
+      .addTag('categories')
+      .addTag('ratings')
+      .addTag('admin')
       .build();
 
     const document = SwaggerModule.createDocument(app, swaggerConfig);

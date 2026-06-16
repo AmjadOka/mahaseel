@@ -44,7 +44,7 @@ export class Wallet {
     default: 0,
     transformer: new DecimalTransformer(),
   })
-  pendingBalance: number;
+  pendingBalance: number = 0;
 
   @Column({
     name: 'total_earned',
@@ -54,7 +54,7 @@ export class Wallet {
     default: 0,
     transformer: new DecimalTransformer(),
   })
-  totalEarned: number;
+  totalEarned: number = 0;
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

@@ -301,6 +301,8 @@ export class PaymentsService {
     this.logger.log(`Stripe event: ${event.type} [${event.id}]`);
 
     switch (event.type) {
+      // ── Checkout events ───────────────────────────────────────────────────
+
       case 'checkout.session.completed':
         await this.handleCheckoutCompleted(
           event.data.object as CheckoutSessionData,
