@@ -2,13 +2,13 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   MessageEvent,
   Param,
   ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Query,
-  Res,
   Sse,
   UseGuards,
 } from '@nestjs/common';
@@ -17,7 +17,6 @@ import { NotificationsService } from './services/notifications.service';
 import { CurrentUser } from 'src/common/decorators';
 import type { AuthUser } from 'src/common/types';
 import { Observable } from 'rxjs';
-import type { Response } from 'express';
 import { NotificationsSseService } from './services/notifications-sse.service';
 
 @UseGuards(JwtAuthGuard)
@@ -45,14 +44,10 @@ export class NotificationsController {
    *   es.onerror = () => es.close(); // reconnect logic handled by the browser
    */
   @Sse('stream')
-  stream(
-    @CurrentUser() user: AuthUser,
-    @Res() res: Response,
-  ): Observable<MessageEvent> {
-    // Keep the connection alive — browser auto-reconnects on drop
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering
-
+  @Header('Cache-Control', 'no-cache')
+  @Header('X-Accel-Buffering', 'no')
+  @Header('Connection', 'keep-alive')
+  stream(@CurrentUser() user: AuthUser): Observable<MessageEvent> {
     return this.sseService.connect(user.sub);
   }
 
