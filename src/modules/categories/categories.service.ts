@@ -13,8 +13,8 @@ import { RedisService } from 'src/shared/redis/redis.service';
 import { UploadService } from '../upload/upload.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
-import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { paginate } from 'src/shared/pagination/pagination.helper';
+import { CategoryFilterDto } from 'src/common/dto/pagination.dto';
 
 // ─── Cache keys ────────────────────────────────────────────────────────────────
 // Centralised so every read and invalidation references the same string.
@@ -58,7 +58,7 @@ export class CategoriesService {
    * filtered views are always fresh without polluting the public cache.
    */
   async findAll(
-    pagination: PaginationDto,
+    pagination: CategoryFilterDto,
     filters: { parentId?: string | null; isActive?: boolean } = {},
   ) {
     const isMainList =
