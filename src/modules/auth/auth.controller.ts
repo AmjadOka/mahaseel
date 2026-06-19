@@ -8,6 +8,7 @@ import {
   HttpStatus,
   Req,
   Res,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
@@ -248,6 +249,9 @@ export class AuthController {
   ===================================================== */
 
   private extractBearerToken(req: Request): string {
-    return req.headers.authorization?.split(' ')[1] ?? '';
+    const [scheme, token] = req.headers.authorization?.split(' ') ?? [];
+    if (scheme !== 'Bearer' || !token)
+      throw new UnauthorizedException('No token provided');
+    return token;
   }
 }

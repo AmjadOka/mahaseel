@@ -111,24 +111,28 @@ export class ResetPasswordService {
   async changePassword(changePasswordDto: ChangePasswordDto) {
     const user = await this.usersRepository
       .createQueryBuilder('user')
-      .addSelect(['user.password', 'user.isResetVerified', 'user.resetExpires'])
+      .addSelect([
+        'user.password',
+        'user.isResetVerified',
+        'user.resetExpires',
+        'user.refreshTokenHash',
+      ])
       .where('user.email = :email', { email: changePasswordDto.email })
       .getOne();
 
     if (!user) throw new NotFoundException('User not found');
 
-    if (!user.isResetVerified) {
+    if (!user.isResetVerified)
       throw new BadRequestException('Reset code not verified');
-    }
 
-    if (!user.resetExpires || user.resetExpires < new Date()) {
+    if (!user.resetExpires || user.resetExpires < new Date())
       throw new BadRequestException('Reset verification expired');
-    }
 
     user.password = await this.passwordService.hash(
       changePasswordDto.newPassword,
     );
     user.refreshTokenHash = null;
+    user.tokenVersion += 1;
     user.resetCode = null;
     user.resetExpires = null;
     user.resetAttempts = 0;
