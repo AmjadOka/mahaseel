@@ -10,7 +10,6 @@ import {
   Query,
   UseGuards,
   ParseUUIDPipe,
-  ParseBoolPipe,
   BadRequestException,
   HttpCode,
   HttpStatus,
@@ -30,7 +29,7 @@ import { AdminGuard } from 'src/common/guards/admin.guard';
 import { CategoriesService } from './categories.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
-import { PaginationDto } from 'src/common/dto/pagination.dto';
+import { CategoryFilterDto } from 'src/common/dto/pagination.dto';
 import { Public } from 'src/common/decorators';
 import type { FastifyRequest } from 'fastify';
 import { FileValidationPipe } from '../upload/validation.pipe';
@@ -51,17 +50,17 @@ export class CategoriesController {
     description: 'Filter by parent UUID. Pass "null" for top-level only.',
   })
   @ApiQuery({ name: 'isActive', required: false, type: Boolean })
-  findAll(
-    @Query() pagination: PaginationDto,
-    @Query('parentId') parentId?: string,
-    @Query('isActive', new ParseBoolPipe({ optional: true }))
-    isActive?: boolean,
-  ) {
+  findAll(@Query() pagination: CategoryFilterDto) {
     const resolvedParentId =
-      parentId === undefined ? null : parentId === 'null' ? null : parentId;
+      pagination.parentId === undefined
+        ? null
+        : pagination.parentId === 'null'
+          ? null
+          : pagination.parentId;
+
     return this.service.findAll(pagination, {
       parentId: resolvedParentId,
-      isActive,
+      isActive: pagination.isActive,
     });
   }
 
