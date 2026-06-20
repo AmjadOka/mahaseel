@@ -8,9 +8,11 @@ import {
   MinLength,
   MaxLength,
   Matches,
+  ValidateIf,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PaginationDto } from 'src/common/dto/pagination.dto';
 
 export class CreateCategoryDto {
   @ApiProperty({ example: 'خضروات', description: 'Arabic name' })
@@ -56,6 +58,30 @@ export class CreateCategoryDto {
 
   @ApiPropertyOptional({ example: true, default: true })
   @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+export class CategoryFilterDto extends PaginationDto {
+  @ApiPropertyOptional({
+    description: 'Filter by parent UUID. Pass "null" for top-level only.',
+  })
+  @IsOptional()
+  @ValidateIf((o) => o.parentId !== 'null')
+  @IsUUID()
+  parentId?: string;
+
+  @ApiPropertyOptional({ type: Boolean })
+  @IsOptional()
+  @Transform(
+    ({ obj }) => {
+      const raw = obj.isActive;
+      if (raw === 'true') return true;
+      if (raw === 'false') return false;
+      return undefined;
+    },
+    { toClassOnly: true },
+  )
   @IsBoolean()
   isActive?: boolean;
 }

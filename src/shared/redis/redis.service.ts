@@ -48,6 +48,40 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return this.client.ttl(key);
   }
 
+  /**
+   * Returns all keys matching a glob pattern, e.g. "categories:main:*".
+   * Uses non-blocking SCAN (safe for production, unlike KEYS).
+   */
+  async keys(pattern: string): Promise<string[]> {
+    const found: string[] = [];
+    let cursor = '0';
+
+    do {
+      const [nextCursor, batch] = await this.client.scan(
+        cursor,
+        'MATCH',
+        pattern,
+        'COUNT',
+        100,
+      );
+      cursor = nextCursor;
+      found.push(...batch);
+    } while (cursor !== '0');
+
+    return found;
+  }
+
+  /**
+   * Deletes all keys matching a glob pattern in one call.
+   * No-op if nothing matches.
+   */
+  async delByPattern(pattern: string): Promise<void> {
+    const matched = await this.keys(pattern);
+    if (matched.length) {
+      await this.client.del(...matched);
+    }
+  }
+
   // ── Distributed locking ────────────────────────────────────────────────────
 
   /**

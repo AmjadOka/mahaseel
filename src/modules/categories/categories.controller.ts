@@ -27,12 +27,15 @@ import {
 
 import { AdminGuard } from 'src/common/guards/admin.guard';
 import { CategoriesService } from './categories.service';
-import { CreateCategoryDto } from './dto/create-category.dto';
+import {
+  CategoryFilterDto,
+  CreateCategoryDto,
+} from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
-import { CategoryFilterDto } from 'src/common/dto/pagination.dto';
 import { Public } from 'src/common/decorators';
 import type { FastifyRequest } from 'fastify';
 import { FileValidationPipe } from '../upload/validation.pipe';
+
 @ApiTags('Categories')
 @Controller('categories')
 @ApiBearerAuth()
@@ -41,6 +44,7 @@ export class CategoriesController {
 
   // ── List ───────────────────────────────────────────────────────────────────
 
+  // controller
   @Get()
   @Public()
   @ApiOperation({ summary: '[Public] List all categories (includes inactive)' })
@@ -51,6 +55,7 @@ export class CategoriesController {
   })
   @ApiQuery({ name: 'isActive', required: false, type: Boolean })
   findAll(@Query() pagination: CategoryFilterDto) {
+    console.log(pagination);
     const resolvedParentId =
       pagination.parentId === undefined
         ? null
@@ -63,7 +68,6 @@ export class CategoriesController {
       isActive: pagination.isActive,
     });
   }
-
   @Get(':id')
   @Public()
   @ApiOperation({

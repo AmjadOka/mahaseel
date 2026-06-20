@@ -14,24 +14,22 @@ import { UploadService } from '../upload/upload.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { paginate } from 'src/shared/pagination/pagination.helper';
-import { CategoryFilterDto } from 'src/common/dto/pagination.dto';
+import { CategoryFilterDto } from './dto/create-category.dto';
 
 // ─── Cache keys ────────────────────────────────────────────────────────────────
 // Centralised so every read and invalidation references the same string.
 // Both the public and admin services share this namespace intentionally —
 // a write from either side busts the same cached response.
-
 const KEY = {
   tree: 'categories:tree',
-  main: 'categories:main',
-  children: (id: string) => `categories:children:${id}`,
+  main: (page: number, limit: number) => `categories:main:${page}:${limit}`,
+  children: (id: string, page: number, limit: number) =>
+    `categories:children:${id}:${page}:${limit}`,
   byId: (id: string) => `categories:id:${id}`,
   bySlug: (slug: string) => `categories:slug:${slug}`,
 } as const;
 
-/** Default TTL applied to every cached value (5 minutes). */
 const TTL = 300;
-
 // ─── Service ───────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -51,34 +49,39 @@ export class CategoriesService {
    * Returns a paginated list of categories.
    *
    * Cache strategy — only the two highest-traffic, filter-free paths are cached:
-   * - `parentId === null`  → `categories:main`   (top-level list)
-   * - `parentId === <id>`  → `categories:children:<id>`
+   * - `parentId === null`  → `categories:main:<page>:<limit>`   (top-level list)
+   * - `parentId === <id>`  → `categories:children:<id>:<page>:<limit>`
    *
    * Any additional filter (e.g. `isActive`) bypasses the cache so admin
    * filtered views are always fresh without polluting the public cache.
+   *
+   * Empty results are cached for a much shorter TTL (5s) so a stale "no
+   * results" response can't persist for the full 5-minute window if data
+   * was created moments after an empty page was first cached.
    */
   async findAll(
     pagination: CategoryFilterDto,
     filters: { parentId?: string | null; isActive?: boolean } = {},
   ) {
-    const isMainList =
-      filters.parentId === null && filters.isActive === undefined;
-    const isChildrenList = !!filters.parentId && filters.isActive === undefined;
+    const page = Number(pagination.page);
+    const limit = Number(pagination.limit);
 
-    // ── Cache read ───────────────────────────────────────────────────────────
-    if (isMainList) {
-      const cached = await this.redis.get(KEY.main);
+    const isCacheable = filters.isActive === undefined;
+    const cacheKey = isCacheable
+      ? filters.parentId === null
+        ? KEY.main(page, limit)
+        : filters.parentId
+          ? KEY.children(filters.parentId, page, limit)
+          : null
+      : null;
+
+    // ── Cache read ──────────────────────────────────────────────
+    if (cacheKey) {
+      const cached = await this.redis.get(cacheKey);
       if (cached) return JSON.parse(cached) as Category[];
     }
 
-    if (isChildrenList) {
-      const cached = await this.redis.get(
-        KEY.children(filters.parentId as string),
-      );
-      if (cached) return JSON.parse(cached) as Category[];
-    }
-
-    // ── DB query ─────────────────────────────────────────────────────────────
+    // ── DB query ──────────────────────────────────────────────
     const qb = this.repo
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.parent', 'parent')
@@ -95,23 +98,12 @@ export class CategoriesService {
       qb.andWhere('c.isActive = :isActive', { isActive: filters.isActive });
     }
 
-    const result = await paginate(
-      qb,
-      Number(pagination.page),
-      Number(pagination.limit),
-    );
+    const result = await paginate(qb, page, limit);
 
-    // ── Cache write ──────────────────────────────────────────────────────────
-    if (isMainList) {
-      await this.redis.set(KEY.main, JSON.stringify(result), TTL);
-    }
-
-    if (isChildrenList) {
-      await this.redis.set(
-        KEY.children(filters.parentId as string),
-        JSON.stringify(result),
-        TTL,
-      );
+    // ── Cache write ──────────────────────────────────────────────
+    if (cacheKey) {
+      const ttl = result.items?.length > 0 ? TTL : 5;
+      await this.redis.set(cacheKey, JSON.stringify(result), ttl);
     }
 
     return result;
@@ -181,9 +173,10 @@ export class CategoriesService {
 
     this.logger.log(`Category created [id=${saved.id}] slug="${slug}"`);
 
-    // Bust the parent's children list and the top-level list so both
-    // reflect the newly added entry immediately.
-    await this.invalidateCache({ parentId: dto.parentId ?? undefined });
+    await this.invalidateCache({
+      id: dto.parentId ?? undefined,
+      parentId: dto.parentId ?? undefined,
+    });
 
     return saved;
   }
@@ -194,8 +187,10 @@ export class CategoriesService {
    * Partially updates a category's metadata (name, slug, sortOrder, isActive,
    * or parentId). All fields are optional — only supplied fields are mutated.
    *
-   * When `parentId` changes, the old parent's children cache is also busted
-   * so both sides of the relationship stay consistent.
+   * When `parentId` changes, BOTH the old and new parent's children caches
+   * (and their `byId` caches, since `findOne` embeds `children`) are busted
+   * so the moved category disappears from the old parent's list and appears
+   * in the new parent's list immediately, rather than after TTL expiry.
    *
    * @throws {NotFoundException}   when `id` or `parentId` does not exist.
    * @throws {ConflictException}   when the new `slug` is already taken.
@@ -234,13 +229,19 @@ export class CategoriesService {
     await this.invalidateCache({
       id,
       slug: saved.slug,
-      // If the parent changed, bust the OLD parent's children list;
-      // otherwise bust the current parent's list so it reflects the update.
-      parentId:
-        oldParentId !== saved.parentId
-          ? (oldParentId ?? undefined)
-          : (saved.parentId ?? undefined),
+      parentId: oldParentId ?? undefined,
     });
+
+    // If the category actually moved to a different parent, the new
+    // parent's children list (and byId cache) is now stale too — without
+    // this, the moved category wouldn't show up under its new parent until
+    // the 5-minute TTL expires.
+    if (oldParentId !== saved.parentId) {
+      await this.invalidateCache({
+        id: saved.parentId ?? undefined,
+        parentId: saved.parentId ?? undefined,
+      });
+    }
 
     return saved;
   }
@@ -276,7 +277,15 @@ export class CategoriesService {
     this.logger.log(
       `Category icon updated [id=${id}] publicId=${upload.publicId}`,
     );
-    await this.invalidateCache({ id, slug: saved.slug });
+
+    // parentId included — without it, the icon change wouldn't be reflected
+    // in the parent's cached children list (where this category appears
+    // embedded) until TTL expiry.
+    await this.invalidateCache({
+      id,
+      slug: saved.slug,
+      parentId: saved.parentId ?? undefined,
+    });
 
     return saved;
   }
@@ -308,7 +317,12 @@ export class CategoriesService {
     const saved = await this.repo.save(category);
 
     this.logger.log(`Category icon removed [id=${id}]`);
-    await this.invalidateCache({ id, slug: saved.slug });
+
+    await this.invalidateCache({
+      id,
+      slug: saved.slug,
+      parentId: saved.parentId ?? undefined,
+    });
 
     return saved;
   }
@@ -440,22 +454,27 @@ export class CategoriesService {
    *
    * Always busts:
    * - `categories:tree` — full tree used by nav/sidebar
-   * - `categories:main` — top-level paginated list
+   * - `categories:main:*` — top-level paginated list (all page/limit variants)
    *
    * Conditionally busts:
-   * - `categories:children:<parentId>` — the affected parent's children list
-   * - `categories:id:<id>`            — the individual category record
-   * - `categories:slug:<slug>`        — slug-based lookup (public storefront)
+   * - `categories:children:<parentId>:*` — the affected parent's children list
+   * - `categories:id:<id>`                — the individual category record
+   * - `categories:slug:<slug>`            — slug-based lookup (public storefront)
    */
   private async invalidateCache(
     opts: { id?: string; slug?: string; parentId?: string } = {},
   ): Promise<void> {
-    const keys: string[] = [KEY.tree, KEY.main];
+    const exactKeys: string[] = [KEY.tree];
 
-    if (opts.parentId) keys.push(KEY.children(opts.parentId));
-    if (opts.id) keys.push(KEY.byId(opts.id));
-    if (opts.slug) keys.push(KEY.bySlug(opts.slug));
+    if (opts.id) exactKeys.push(KEY.byId(opts.id));
+    if (opts.slug) exactKeys.push(KEY.bySlug(opts.slug));
 
-    await Promise.all(keys.map((k) => this.redis.del(k)));
+    await Promise.all([
+      ...exactKeys.map((k) => this.redis.del(k)),
+      this.redis.delByPattern('categories:main:*'),
+      opts.parentId
+        ? this.redis.delByPattern(`categories:children:${opts.parentId}:*`)
+        : Promise.resolve(),
+    ]);
   }
 }
