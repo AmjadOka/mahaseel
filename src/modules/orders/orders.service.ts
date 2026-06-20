@@ -490,7 +490,7 @@ export class OrdersService {
         throw new ForbiddenException('Access denied');
       if (order.status !== OrderStatus.PENDING) {
         throw new BadRequestException(
-          console.log(order.status, 'sxxwxwwwswwww'),
+          console.error(order.status, 'sxxwxwwwswwww'),
           'Order cannot be accepted in its current state',
         );
       }
@@ -589,7 +589,7 @@ export class OrdersService {
         finalPrice!,
       );
     } catch (stripeError) {
-      console.log(stripeError);
+      console.error(stripeError);
       // Revert order back to PENDING
       await this.dataSource.manager.update(Order, orderId, {
         status: OrderStatus.PENDING,

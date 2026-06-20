@@ -19,7 +19,6 @@ import {
   ApiBearerAuth,
   ApiOperation,
   ApiConsumes,
-  ApiBody,
 } from '@nestjs/swagger';
 import { FarmsService } from './farms.service';
 import { CreateFarmDto, UpdateFarmDto } from './dto/create-farm.dto';
@@ -30,6 +29,7 @@ import { Role } from 'src/common/enums/role.enum';
 import type { AuthUser } from 'src/common/types';
 import { FilesValidationPipe } from '../upload/validation.pipe';
 import type { FastifyRequest } from 'fastify';
+import { FarmAssetKind } from './entities/farm.entity';
 
 @ApiTags('farms')
 @Controller('farms')
@@ -70,22 +70,70 @@ export class FarmsController {
   @Patch(':id/media')
   @ApiOperation({ summary: 'Upload farm images/videos (max 10)' })
   @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        files: {
-          type: 'array',
-          items: { type: 'string', format: 'binary' },
-        },
-      },
-    },
-  })
   async uploadMedia(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
     @Req() req: FastifyRequest,
   ) {
+    const files = await this.parseMultipart(req);
+    return this.farmsService.uploadAssets(
+      id,
+      user.sub,
+      files,
+      FarmAssetKind.MEDIA,
+    );
+  }
+
+  @Patch(':id/documents')
+  @ApiOperation({ summary: 'Upload farm documents' })
+  @ApiConsumes('multipart/form-data')
+  async uploadDocuments(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+    @Req() req: FastifyRequest,
+  ) {
+    const files = await this.parseMultipart(req);
+    return this.farmsService.uploadAssets(
+      id,
+      user.sub,
+      files,
+      FarmAssetKind.DOCUMENT,
+    );
+  }
+
+  @Delete(':id/media/:mediaId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  deleteMedia(
+    @Param('id') id: string,
+    @Param('mediaId') mediaId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.farmsService.deleteAsset(
+      id,
+      mediaId,
+      user.sub,
+      FarmAssetKind.MEDIA,
+    );
+  }
+
+  @Delete(':id/documents/:documentId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  deleteDocument(
+    @Param('id') id: string,
+    @Param('documentId') documentId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.farmsService.deleteAsset(
+      id,
+      documentId,
+      user.sub,
+      FarmAssetKind.DOCUMENT,
+    );
+  }
+
+  private async parseMultipart(
+    req: FastifyRequest,
+  ): Promise<Express.Multer.File[]> {
     const files: Express.Multer.File[] = [];
     for await (const part of req.parts()) {
       if (part.type === 'file') {
@@ -106,18 +154,6 @@ export class FarmsController {
     }
 
     new FilesValidationPipe().transform(files);
-
-    return this.farmsService.uploadMedia(id, user.sub, files);
-  }
-
-  @Delete(':id/media/:mediaId')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Delete a farm media item' })
-  deleteMedia(
-    @Param('id') id: string,
-    @Param('mediaId') mediaId: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.farmsService.deleteMedia(id, mediaId, user.sub);
+    return files;
   }
 }

@@ -198,7 +198,6 @@ export class AuthService {
       .where('user.email = :email', { email: dto.email })
       .getOne();
 
-    console.log(user);
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
     // Google-only account — no password set yet

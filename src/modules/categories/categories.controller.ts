@@ -55,7 +55,6 @@ export class CategoriesController {
   })
   @ApiQuery({ name: 'isActive', required: false, type: Boolean })
   findAll(@Query() pagination: CategoryFilterDto) {
-    console.log(pagination);
     const resolvedParentId =
       pagination.parentId === undefined
         ? null

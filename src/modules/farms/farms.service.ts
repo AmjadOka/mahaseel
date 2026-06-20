@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindOptionsWhere, ILike } from 'typeorm';
-import { Farm, FarmMedia } from './entities/farm.entity';
+import { Farm, FarmMedia, FarmAssetKind } from './entities/farm.entity';
 import { CreateFarmDto, UpdateFarmDto } from './dto/create-farm.dto';
 import { FarmStatus } from 'src/common/enums/farm.enum';
 import { NotificationsService } from '../notifications/services/notifications.service';
@@ -16,6 +16,7 @@ import { NotificationType } from 'src/common/enums/notification.enum';
 import { UploadService } from '../upload/upload.service';
 import { MediaType } from 'src/common/enums/platform.enum';
 import { RedisService } from 'src/shared/redis/redis.service';
+import { Product } from '../products/entities/product.entity';
 
 // ─── DTOs / Types ────────────────────────────────────────────────────────────
 
@@ -26,7 +27,7 @@ export interface PaginationOptions {
 
 export interface FarmFilters {
   status?: FarmStatus;
-  search?: string; // searches name / location
+  search?: string;
   ownerId?: string;
 }
 
@@ -60,10 +61,10 @@ export interface RejectionPayload extends ApprovalPayload {
 // ── Cache constants ────────────────────────────────────────────────────────────
 
 const TTL = {
-  farmDetail: 60 * 10, // 10 min — single farm detail
-  ownerList: 60 * 3, // 3 min  — paginated+filtered list (short; can't bust all page variants)
-  stats: 60 * 2, // 2 min  — dashboard stat block
-  farmProducts: 60 * 5, // 5 min  — farm's product list
+  farmDetail: 60 * 10,
+  ownerList: 60 * 3,
+  stats: 60 * 2,
+  farmProducts: 60 * 5,
 } as const;
 
 const CK = {
@@ -71,11 +72,6 @@ const CK = {
   products: (farmId: string) => `farms:products:${farmId}`,
   stats: (ownerId?: string) =>
     ownerId ? `farms:stats:${ownerId}` : 'farms:stats',
-
-  /**
-   * Paginated owner list — includes page/limit/filters in the key so every
-   * unique request gets its own slot. Short TTL handles invalidation.
-   */
   ownerList: (
     ownerId: string,
     opts: PaginationOptions,
@@ -99,9 +95,9 @@ export class FarmsService {
 
   constructor(
     @InjectRepository(Farm) private readonly farmRepo: Repository<Farm>,
-    private readonly notificationsService: NotificationsService,
     @InjectRepository(FarmMedia)
     private readonly mediaRepo: Repository<FarmMedia>,
+    private readonly notificationsService: NotificationsService,
     private readonly uploadService: UploadService,
     private readonly redis: RedisService,
   ) {}
@@ -137,16 +133,12 @@ export class FarmsService {
 
   // ── Read ────────────────────────────────────────────────────────────────────
 
-  /**
-   * Owner: paginated list of their own non-deleted farms.
-   */
   async findMyFarms(
     ownerId: string,
     { page = 1, limit = 10 }: PaginationOptions = {},
     filters: Pick<FarmFilters, 'status' | 'search'> = {},
   ): Promise<PaginatedResult<Farm>> {
     const where: FindOptionsWhere<Farm> = { ownerId, isDeleted: false };
-
     const cacheKey = CK.ownerList(ownerId, { page, limit }, filters);
 
     const cached = await this.redis.get(cacheKey);
@@ -175,9 +167,7 @@ export class FarmsService {
 
     return result;
   }
-  /**
-   * Admin: paginated list of all farms — not cached (live data).
-   */
+
   async findAll(
     { page = 1, limit = 20 }: PaginationOptions = {},
     filters: FarmFilters = {},
@@ -209,10 +199,6 @@ export class FarmsService {
     };
   }
 
-  /**
-   * Single farm – optionally scoped to an owner.
-   * Pass `includeDeleted = true` for admin use-cases.
-   */
   async findOne(
     id: string,
     ownerId?: string,
@@ -262,7 +248,6 @@ export class FarmsService {
       throw new BadRequestException('Cannot edit a suspended farm.');
     }
 
-    // If re-submitting after rejection, reset to PENDING
     const wasRejected = farm.status === FarmStatus.REJECTED;
     Object.assign(farm, dto);
     if (wasRejected) {
@@ -289,7 +274,7 @@ export class FarmsService {
     return saved;
   }
 
-  // ── Admin: Approve ──────────────────────────────────────────────────────────
+  // ── Admin: Approve / Reject / Suspend / Unsuspend ──────────────────────────
 
   async approveFarm(farmId: string, payload: ApprovalPayload): Promise<Farm> {
     const farm = await this.findOne(farmId);
@@ -327,8 +312,6 @@ export class FarmsService {
     return this.findOne(farmId);
   }
 
-  // ── Admin: Reject ───────────────────────────────────────────────────────────
-
   async rejectFarm(farmId: string, payload: RejectionPayload): Promise<Farm> {
     const farm = await this.findOne(farmId);
 
@@ -360,8 +343,6 @@ export class FarmsService {
 
     return this.findOne(farmId);
   }
-
-  // ── Admin: Suspend / Unsuspend ──────────────────────────────────────────────
 
   async suspendFarm(farmId: string, payload: RejectionPayload): Promise<Farm> {
     const farm = await this.findOne(farmId);
@@ -447,6 +428,7 @@ export class FarmsService {
       referenceType: 'farm',
       referenceId: farm.id,
     });
+
     await Promise.all([
       this.bustFarmAndStats(id, ownerId),
       this.redis.del(CK.products(id)),
@@ -454,13 +436,35 @@ export class FarmsService {
   }
 
   /**
-   * Uploads multiple images/videos for a farm in parallel.
+   * Admin hard-delete (permanent). Use with caution.
+   */
+  async hardDelete(farmId: string, adminId: string): Promise<void> {
+    const farm = await this.findOne(farmId, undefined, true);
+
+    // wipe all assets (media + documents) for this farm
+    await this.deleteAllAssets(farmId);
+
+    await this.farmRepo.remove(farm);
+    this.logger.warn(`Farm hard-deleted [id=${farmId}] by admin [${adminId}]`);
+
+    await Promise.all([
+      this.bustFarmAndStats(farmId, farm.ownerId),
+      this.redis.del(CK.products(farmId)),
+    ]);
+  }
+
+  // ── Assets (media + documents) ──────────────────────────────────────────────
+  // Single implementation parameterized by FarmAssetKind.
+
+  /**
+   * Uploads multiple files (images/videos/documents) for a farm in parallel.
    * Validates ownership before touching storage.
    */
-  async uploadMedia(
+  async uploadAssets(
     farmId: string,
     merchantId: string,
     files: Express.Multer.File[],
+    kind: FarmAssetKind,
   ): Promise<FarmMedia[]> {
     await this.validateOwnership(farmId, merchantId);
 
@@ -472,9 +476,10 @@ export class FarmsService {
       files.map((file) => this.uploadService.upload(file, 'farm')),
     );
 
-    const mediaEntities = uploaded.map((asset, index) =>
+    const entities = uploaded.map((asset, index) =>
       this.mediaRepo.create({
         farmId,
+        kind,
         url: asset.url,
         publicId: asset.publicId,
         mediaType: files[index].mimetype.startsWith('video/')
@@ -484,69 +489,66 @@ export class FarmsService {
       }),
     );
 
-    return this.mediaRepo.save(mediaEntities);
+    const saved = await this.mediaRepo.save(entities);
+
+    if (kind === FarmAssetKind.MEDIA) {
+      await this.redis.del(CK.one(farmId));
+    }
+
+    return saved;
   }
 
   /**
-   * Deletes a single media row and its Cloudinary asset.
+   * Deletes a single asset row (media or document) and its storage object.
    */
-  async deleteMedia(
+  async deleteAsset(
     farmId: string,
-    mediaId: string,
+    assetId: string,
     merchantId: string,
+    kind: FarmAssetKind,
   ): Promise<void> {
     await this.validateOwnership(farmId, merchantId);
 
-    const media = await this.mediaRepo.findOne({
-      where: { id: mediaId, farmId },
+    const asset = await this.mediaRepo.findOne({
+      where: { id: assetId, farmId, kind },
     });
 
-    if (!media) {
-      throw new NotFoundException('Media not found');
+    if (!asset) {
+      throw new NotFoundException(
+        kind === FarmAssetKind.DOCUMENT
+          ? 'Document not found'
+          : 'Media not found',
+      );
     }
 
-    if (media.publicId) {
-      await this.uploadService.delete(media.publicId);
+    if (asset.publicId) {
+      await this.uploadService.delete(asset.publicId);
     }
 
-    await this.mediaRepo.delete(mediaId);
+    await this.mediaRepo.delete(assetId);
+
+    if (kind === FarmAssetKind.MEDIA) {
+      await this.redis.del(CK.one(farmId));
+    }
   }
 
   /**
-   * Deletes ALL media for a farm — call this inside your deleteFarm() method
-   * so Cloudinary assets are cleaned up when a farm is removed.
+   * Deletes ALL assets (media + documents) for a farm. Call this from
+   * hardDelete()/softDelete() flows so storage objects don't leak.
    */
-  async deleteAllMedia(farmId: string): Promise<void> {
-    const allMedia = await this.mediaRepo.find({ where: { farmId } });
+  async deleteAllAssets(farmId: string): Promise<void> {
+    const allAssets = await this.mediaRepo.find({ where: { farmId } });
 
     await Promise.all(
-      allMedia
-        .filter((m) => m.publicId)
-        .map((m) => this.uploadService.delete(m.publicId)),
+      allAssets
+        .filter((a) => a.publicId)
+        .map((a) => this.uploadService.delete(a.publicId)),
     );
 
     await this.mediaRepo.delete({ farmId });
   }
-
-  /**
-   * Admin hard-delete (permanent). Use with caution.
-   */
-  async hardDelete(farmId: string, adminId: string): Promise<void> {
-    const farm = await this.findOne(farmId, undefined, true);
-    await this.farmRepo.remove(farm);
-    this.logger.warn(`Farm hard-deleted [id=${farmId}] by admin [${adminId}]`);
-    await Promise.all([
-      this.bustFarmAndStats(farmId, farm.ownerId),
-      this.redis.del(CK.products(farmId)),
-    ]);
-  }
-
   // ── Products ────────────────────────────────────────────────────────────────
 
-  /**
-   * Returns the farm with its products relation loaded.
-   * Caller can access `farm.products` for the full list.
-   */
   async getFarmProducts(farmId: string, requesterId?: string) {
     const farm = await this.findOne(farmId, requesterId);
 
@@ -557,10 +559,8 @@ export class FarmsService {
     }
     const cacheKey = CK.products(farmId);
     const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
+    if (cached) return JSON.parse(cached) as Product[];
 
-    // Products are loaded via the farm relation in findOne —
-    // return them and cache this slice independently.
     const products = farm.products ?? [];
     await this.redis.set(cacheKey, JSON.stringify(products), TTL.farmProducts);
     return products;
@@ -583,7 +583,7 @@ export class FarmsService {
       .select('farm.status', 'status')
       .addSelect('COUNT(*)', 'count')
       .groupBy('farm.status')
-      .getRawMany<{ status: FarmStatus; count: string; totalArea: string }>();
+      .getRawMany<{ status: FarmStatus; count: string }>();
 
     const base: FarmStats = {
       total: 0,
@@ -633,13 +633,6 @@ export class FarmsService {
     }
   }
 
-  /**
-   * Confirms the farm exists and belongs to the requesting merchant.
-   * Throws before any mutation touches storage or the DB.
-   *
-   * @throws NotFoundException   – farm does not exist or is soft-deleted
-   * @throws ForbiddenException  – farm exists but belongs to a different owner
-   */
   private async validateOwnership(
     farmId: string,
     merchantId: string,
@@ -660,12 +653,9 @@ export class FarmsService {
 
     return farm;
   }
+
   // ── Cache helpers ─────────────────────────────────────────────────────────────
 
-  /**
-   * Busts the farm detail key and both stat scopes (global + per-owner).
-   * Used by every admin status mutation.
-   */
   private async bustFarmAndStats(
     farmId: string,
     ownerId: string,
@@ -677,10 +667,6 @@ export class FarmsService {
     ]);
   }
 
-  /**
-   * Busts only the stat keys — used after create()
-   * (the new farm has no prior detail cache to clear).
-   */
   private async bustStats(ownerId: string): Promise<void> {
     await Promise.all([
       this.redis.del(CK.stats()),

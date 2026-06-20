@@ -12,7 +12,7 @@ export async function paginate<T>(
     .skip((page - 1) * limit)
     .take(limit)
     .getMany();
-  console.log(limit, 'limit');
+
   const totalPages = Math.ceil(total / limit);
 
   return {

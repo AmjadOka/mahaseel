@@ -13,6 +13,11 @@ import { User } from '../../users/entities/user.entity';
 import { Product } from '../../products/entities/product.entity';
 import { MediaType } from 'src/common/enums/platform.enum';
 
+export enum FarmAssetKind {
+  MEDIA = 'media', // photos/videos shown publicly
+  DOCUMENT = 'document', // registry papers, ownership docs, etc.
+}
+
 @Entity('farms')
 export class Farm {
   @PrimaryGeneratedColumn('uuid')
@@ -86,10 +91,16 @@ export class Farm {
   @OneToMany(() => Product, (product) => product.farm)
   products: Product[];
 
-  @OneToMany(() => FarmMedia, (m) => m.farm, { cascade: true }) // ← was: ProductMedia / m.product
+  @OneToMany(() => FarmMedia, (m) => m.farm, { cascade: true })
   media: FarmMedia[];
 }
 
+/**
+ * Single table for both public media (photos/videos) and private
+ * documents (registry papers, etc). `kind` discriminates between them.
+ * Replaces the old separate FarmMedia / DocumentdMedia entities, which
+ * incorrectly mapped to the same 'farm_media' table.
+ */
 @Entity('farm_media')
 export class FarmMedia {
   @PrimaryGeneratedColumn('uuid')
@@ -97,6 +108,13 @@ export class FarmMedia {
 
   @Column({ name: 'farm_id' })
   farmId: string;
+
+  @Column({
+    type: 'enum',
+    enum: FarmAssetKind,
+    default: FarmAssetKind.MEDIA,
+  })
+  kind: FarmAssetKind;
 
   @Column()
   url: string;
